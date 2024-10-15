@@ -314,7 +314,7 @@ class RTCSession extends EventManager implements Owner {
       requestParams['from_display_name'] = options['from_display_name'] ?? '';
       requestParams['from_uri'] = URI.parse(options['from_uri']);
       extraHeaders
-        .add('P-Preferred-Identity: ${_ua.configuration.uri.toString()}');
+          .add('P-Preferred-Identity: ${_ua.configuration.uri.toString()}');
     }
 
     if (anonymous) {
@@ -2575,7 +2575,7 @@ class RTCSession extends EventManager implements Owner {
         options['rtcOfferConstraints'] ?? _rtcOfferConstraints;
 
     Map<String, dynamic> mediaConstraints =
-        options['mediaConstraints'] ?? <String, dynamic>{};
+        options['mediaConstraints'] ?? <String, dynamic>{'audio': true};
 
     dynamic sdpSemantics =
         options['pcConfig']?['sdpSemantics'] ?? 'unified-plan';
@@ -2937,7 +2937,7 @@ class RTCSession extends EventManager implements Owner {
   }
 
   /// SDP offers may contain text media channels. e.g. Older clients using linphone.
-  /// 
+  ///
   /// WebRTC does not support text media channels, so remove them.
   String? _sdpOfferToWebRTC(String? sdpInput) {
     if (sdpInput == null) {
