@@ -136,6 +136,13 @@ class SIPUATcpSocket extends SIPUASocketInterface {
       throw 'transport closed';
     }
     try {
+      // Hook: OUTGOING raw message
+      if (rawSipHook != null) {
+        final String data = message?.toString() ?? '';
+        if (data.isNotEmpty) {
+          rawSipHook!.call('OUTGOING', data);
+        }
+      }
       _tcpSocketImpl!.send(message);
       return true;
     } catch (error) {
@@ -167,6 +174,13 @@ class SIPUATcpSocket extends SIPUASocketInterface {
     logger.d('Received TcpSocket data');
     if (data != null) {
       if (data.toString().trim().isNotEmpty) {
+        // Hook: INCOMING raw message
+        if (rawSipHook != null) {
+          final String text = data.toString();
+          if (text.isNotEmpty) {
+            rawSipHook!.call('INCOMING', text);
+          }
+        }
         ondata!(data);
       } else {
         logger.d('Received and ignored empty packet');
