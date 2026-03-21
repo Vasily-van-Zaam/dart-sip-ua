@@ -1,6 +1,22 @@
 # Changelog
 
 --------------------------------------------
+[1.0.1+1] - Synergy fork (Vasily-van-Zaam/dart-sip-ua)
+
+* Fix: wrap `_processInDialogSdpOffer` in `_receiveReinvite` with try/catch so that when
+  `setRemoteDescription` fails (library already sends SIP 488), `Exceptions.TypeError` /
+  `AssertionError` does not surface as an unhandled async error and crash the Flutter app.
+  Aligns error handling with `_receiveUpdate`. Intended for upstream PR to flutter-webrtc/dart-sip-ua.
+
+--------------------------------------------
+[1.0.1] -2024.12.19
+
+* make sure the session terminates by @victortive in https://github.com/flutter-webrtc/dart-sip-ua/pull/485
+* Hold and video upgrade fixed by @mikaelwills in https://github.com/flutter-webrtc/dart-sip-ua/pull/503
+* sip_ua_helper: add sendOptions by @eschmidbauer in https://github.com/flutter-webrtc/dart-sip-ua/pull/476
+* Update callscreen.dart by @HVaidehi in https://github.com/flutter-webrtc/dart-sip-ua/pull/427
+
+
 [1.0.0] - 2024.08.24
 
 * allow to change UA uri in runtime (#425)

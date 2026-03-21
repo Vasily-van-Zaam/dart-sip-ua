@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:logger/logger.dart';
 import 'package:sdp_transform/sdp_transform.dart' as sdp_transform;
+
 import 'package:sip_ua/sip_ua.dart';
 import 'package:sip_ua/src/event_manager/internal_events.dart';
 import 'package:sip_ua/src/map_helper.dart';
@@ -14,9 +15,9 @@ import 'event_manager/event_manager.dart';
 import 'event_manager/subscriber_events.dart';
 import 'logger.dart';
 import 'message.dart';
+import 'options.dart';
 import 'rtc_session.dart';
 import 'rtc_session/refer_subscriber.dart';
-import 'sip_message.dart';
 import 'stack_trace_nj.dart';
 import 'subscriber.dart';
 import 'transports/web_socket.dart';
@@ -123,7 +124,7 @@ class SIPUAHelper extends EventManager {
     required bool voiceOnly,
     Map<String, dynamic>? options,
     bool useUpdate = false,
-    Function(IncomingMessage)? done,
+    Function(IncomingMessage?)? done,
   }) async {
     Map<String, dynamic> finalOptions = options ?? buildCallOptions(voiceOnly);
     call.renegotiate(options: finalOptions, useUpdate: useUpdate, done: done);
@@ -179,9 +180,9 @@ class SIPUAHelper extends EventManager {
     _settings.instance_id = uaSettings.instanceId;
     _settings.registrar_server = uaSettings.registrarServer;
     _settings.contact_uri = uaSettings.contact_uri;
-    _settings.connection_recovery_max_interval = 
+    _settings.connection_recovery_max_interval =
         uaSettings.connectionRecoveryMaxInterval;
-    _settings.connection_recovery_min_interval = 
+    _settings.connection_recovery_min_interval =
         uaSettings.connectionRecoveryMinInterval;
     _settings.terminateOnAudioMediaPortZero =
         uaSettings.terminateOnMediaPortZero;
@@ -413,6 +414,11 @@ class SIPUAHelper extends EventManager {
     return _ua!.sendMessage(target, body, options, params);
   }
 
+  Options sendOptions(
+      String target, String body, Map<String, dynamic>? params) {
+    return _ua!.sendOptions(target, body, params);
+  }
+
   void subscribe(String target, String event, String contentType) {
     Subscriber s = _ua!.subscribe(target, event, contentType);
 
@@ -554,7 +560,7 @@ class Call {
     assert(_session != null, 'ERROR(hangup): rtc session is invalid!');
     if (peerConnection != null) {
       for (MediaStream? stream in peerConnection!.getLocalStreams()) {
-        if (stream == null) return;
+        if (stream == null) continue;
         logger.d(
             'Stopping local stream with tracks: ${stream.getTracks().length}');
         for (MediaStreamTrack track in stream.getTracks()) {
@@ -563,7 +569,7 @@ class Call {
         }
       }
       for (MediaStream? stream in peerConnection!.getRemoteStreams()) {
-        if (stream == null) return;
+        if (stream == null) continue;
         logger.d(
             'Stopping remote stream with tracks: ${stream.getTracks().length}');
         for (MediaStreamTrack track in stream.getTracks()) {
@@ -600,7 +606,7 @@ class Call {
   void renegotiate({
     required Map<String, dynamic>? options,
     bool useUpdate = false,
-    Function(IncomingMessage)? done,
+    Function(IncomingMessage?)? done,
   }) {
     assert(_session != null, 'ERROR(renegotiate): rtc session is invalid!');
     _session.renegotiate(options: options, useUpdate: useUpdate, done: done);
