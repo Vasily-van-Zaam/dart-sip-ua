@@ -175,6 +175,7 @@ class SIPUAHelper extends EventManager {
     _settings.dtmf_mode = uaSettings.dtmfMode;
     _settings.session_timers = uaSettings.sessionTimers;
     _settings.ice_gathering_timeout = uaSettings.iceGatheringTimeout;
+    _settings.sip_advertise_ice = uaSettings.sipAdvertiseIce;
     _settings.session_timers_refresh_method =
         uaSettings.sessionTimersRefreshMethod;
     _settings.instance_id = uaSettings.instanceId;
@@ -885,6 +886,10 @@ class UaSettings {
 
   /// ICE Gathering Timeout, default 500ms
   int iceGatheringTimeout = 500;
+
+  /// Advertise ICE in SIP headers (`Supported: ice`, `Contact;+sip.ice` on REGISTER).
+  /// Default true (upstream behavior). Set false to omit both.
+  bool sipAdvertiseIce = true;
 
   /// Max interval between recovery connection, default 30 sec
   int connectionRecoveryMaxInterval = 30;

@@ -50,8 +50,10 @@ class Registrator {
     // Contact header.
     _contact = _ua.contact.toString();
 
-    // Sip.ice media feature tag (RFC 5768).
-    _contact += ';+sip.ice';
+    // Sip.ice media feature tag (RFC 5768), optional (see Settings.sip_advertise_ice).
+    if (_ua.configuration.sip_advertise_ice) {
+      _contact += ';+sip.ice';
+    }
 
     // Custom headers for REGISTER and un-REGISTER.
     _extraHeaders = ua.configuration.register_extra_headers;

@@ -1,6 +1,13 @@
 # Changelog
 
 --------------------------------------------
+[1.0.1+2] - Synergy fork (Vasily-van-Zaam/dart-sip-ua)
+
+* Feature: `UaSettings.sipAdvertiseIce` / `Settings.sip_advertise_ice` (default `true`).
+  When `false`, omit `ice` from auto-generated `Supported:` headers and omit `;+sip.ice`
+  from REGISTER `Contact`. WebRTC SDP may still contain ICE attributes from the stack.
+
+--------------------------------------------
 [1.0.1+1] - Synergy fork (Vasily-van-Zaam/dart-sip-ua)
 
 * Fix: wrap `_processInDialogSdpOffer` in `_receiveReinvite` with try/catch so that when

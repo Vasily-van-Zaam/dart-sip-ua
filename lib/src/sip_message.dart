@@ -250,14 +250,18 @@ class OutgoingRequest {
         if (ua.contact!.pub_gruu != null || ua.contact!.temp_gruu != null) {
           supported.add('gruu');
         }
-        supported.add('ice');
+        if (ua.configuration.sip_advertise_ice) {
+          supported.add('ice');
+        }
         supported.add('replaces');
         break;
       case SipMethod.UPDATE:
         if (ua.configuration.session_timers) {
           supported.add('timer');
         }
-        supported.add('ice');
+        if (ua.configuration.sip_advertise_ice) {
+          supported.add('ice');
+        }
         break;
       default:
         break;
@@ -594,14 +598,16 @@ class IncomingRequest extends IncomingMessage {
         if (ua!.contact!.pub_gruu != null || ua!.contact!.temp_gruu != null) {
           supported.add('gruu');
         }
-        supported.add('ice');
+        if (ua!.configuration.sip_advertise_ice) {
+          supported.add('ice');
+        }
         supported.add('replaces');
         break;
       case SipMethod.UPDATE:
         if (ua!.configuration.session_timers) {
           supported.add('timer');
         }
-        if (body != null) {
+        if (body != null && ua!.configuration.sip_advertise_ice) {
           supported.add('ice');
         }
         supported.add('replaces');

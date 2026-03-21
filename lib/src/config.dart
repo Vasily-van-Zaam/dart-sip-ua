@@ -69,6 +69,11 @@ class Settings {
 
   /// Sip Message Delay (in millisecond) ( default 0 ).
   int sip_message_delay = 0;
+
+  /// When true (default), advertise ICE in SIP: `Supported: ...ice...` and
+  /// `;+sip.ice` on REGISTER Contact (RFC 5768). Set false if the PBX must not
+  /// treat the UA as ICE-capable (SDP may still contain ICE lines from WebRTC).
+  bool sip_advertise_ice = true;
 }
 
 // Configuration checks.
