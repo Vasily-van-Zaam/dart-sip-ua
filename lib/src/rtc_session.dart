@@ -1157,9 +1157,19 @@ class RTCSession extends EventManager implements Owner {
 
     bool? upgradeToVideo;
     try {
-      upgradeToVideo = (options['mediaConstraints']?['video'] != false ||
-              options['mediaConstraints']?['mandatory']?['video'] != null) &&
-          rtcOfferConstraints?['offerToReceiveVideo'] == null;
+      // Only upgrade to video when the caller explicitly requested video.
+      // Important: `null != false` is true in Dart, so the old logic could
+      // incorrectly treat "video not specified" as "video enabled".
+      final dynamic requestedVideo = options['mediaConstraints']?['video'];
+      final dynamic requestedMandatoryVideo =
+          options['mediaConstraints']?['mandatory']?['video'];
+
+      final bool explicitlyWantsVideo =
+          requestedVideo != null && requestedVideo != false;
+
+      upgradeToVideo =
+          (explicitlyWantsVideo || requestedMandatoryVideo != null) &&
+              rtcOfferConstraints?['offerToReceiveVideo'] == null;
     } catch (e) {
       print('Failed to determine upgrade to video: $e');
     }
