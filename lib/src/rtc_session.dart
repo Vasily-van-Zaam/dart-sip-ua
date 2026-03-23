@@ -2627,7 +2627,7 @@ class RTCSession extends EventManager implements Owner {
       sendRequest(SipMethod.ACK);
 
       // If it is a 2XX retransmission exit now.
-      if (succeeded != null) {
+      if (succeeded) {
         return;
       }
 
