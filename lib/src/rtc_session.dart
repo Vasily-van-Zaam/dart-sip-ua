@@ -2891,7 +2891,7 @@ class RTCSession extends EventManager implements Owner {
       _handleSessionTimersInIncomingResponse(response);
 
       // If it is a 2XX retransmission exit now.
-      if (succeeded != null) {
+      if (succeeded) {
         return;
       }
 
