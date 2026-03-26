@@ -1414,12 +1414,11 @@ class RTCSession extends EventManager implements Owner {
           }
           break;
         case SipMethod.NOTIFY:
-          // In-dialog NOTIFY must always be acknowledged with a final response.
-          // Some servers (e.g. FreeSWITCH) may delay cleanup/hangup if NOTIFY is not answered.
-          // If session state is not CONFIRMED yet, we still respond 200 and ignore the body.
-          request.reply(200);
-          if (_status == C.STATUS_CONFIRMED) {
+          logger.d('SipMethod.NOTIFY status: $_status');
+          if (_status == C.STATUS_CONFIRMED || _status == C.STATUS_ANSWERED) {
             _receiveNotify(request);
+          } else {
+            request.reply(403, 'Forbidden');
           }
           break;
         default:
