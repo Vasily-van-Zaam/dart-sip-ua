@@ -1416,7 +1416,8 @@ class RTCSession extends EventManager implements Owner {
         case SipMethod.NOTIFY:
           logger.d('SipMethod.NOTIFY status: $_status');
           if (_status == C.STATUS_CONFIRMED ||
-              _status == C.STATUS_WAITING_FOR_ANSWER) {
+              _status == C.STATUS_WAITING_FOR_ANSWER ||
+              _status == C.STATUS_ANSWERED) {
             _receiveNotify(request);
           } else {
             request.reply(403, 'Forbidden');
