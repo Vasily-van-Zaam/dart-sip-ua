@@ -2273,7 +2273,9 @@ class RTCSession extends EventManager implements Owner {
 
           break;
         }
-
+      case 'talk':
+        request.reply(200);
+        break;
       default:
         {
           request.reply(489);
