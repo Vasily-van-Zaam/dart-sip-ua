@@ -1365,7 +1365,7 @@ class RTCSession extends EventManager implements Owner {
                     status_code: request.status_code,
                     reason_phrase: request.reason_phrase));
           } else {
-            request.reply(403, 'Wrong Status');
+            request.reply(403, 'Forbidden');
           }
           break;
         case SipMethod.INVITE:
@@ -1376,7 +1376,7 @@ class RTCSession extends EventManager implements Owner {
               _receiveReinvite(request);
             }
           } else {
-            request.reply(403, 'Wrong Status');
+            request.reply(403, 'Forbidden');
           }
           break;
         case SipMethod.INFO:
@@ -1396,28 +1396,30 @@ class RTCSession extends EventManager implements Owner {
               request.reply(415);
             }
           } else {
-            request.reply(403, 'Wrong Status');
+            request.reply(403, 'Forbidden');
           }
           break;
         case SipMethod.UPDATE:
           if (_status == C.STATUS_CONFIRMED) {
             _receiveUpdate(request);
           } else {
-            request.reply(403, 'Wrong Status');
+            request.reply(403, 'Forbidden');
           }
           break;
         case SipMethod.REFER:
           if (_status == C.STATUS_CONFIRMED) {
             _receiveRefer(request);
           } else {
-            request.reply(403, 'Wrong Status');
+            request.reply(403, 'Forbidden');
           }
           break;
         case SipMethod.NOTIFY:
+          // In-dialog NOTIFY must always be acknowledged with a final response.
+          // Some servers (e.g. FreeSWITCH) may delay cleanup/hangup if NOTIFY is not answered.
+          // If session state is not CONFIRMED yet, we still respond 200 and ignore the body.
+          request.reply(200);
           if (_status == C.STATUS_CONFIRMED) {
             _receiveNotify(request);
-          } else {
-            request.reply(403, 'Wrong Status');
           }
           break;
         default:
