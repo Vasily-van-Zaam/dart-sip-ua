@@ -58,8 +58,8 @@ class DialogRequestSender {
             TransactionState.TERMINATED) {
       _dialog.uac_pending_reply = true;
       EventManager eventHandlers = request_sender.clientTransaction!;
-      late void Function(EventStateChanged data) stateChanged;
-      stateChanged = (EventStateChanged data) {
+      late void Function(dynamic data) stateChanged;
+      stateChanged = (dynamic data) {
         if (request_sender.clientTransaction?.state ==
                 TransactionState.ACCEPTED ||
             request_sender.clientTransaction?.state ==

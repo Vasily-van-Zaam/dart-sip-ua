@@ -819,7 +819,7 @@ class RTCSession extends EventManager implements Owner {
 
           // .., or when the INVITE transaction times out
           _request.server_transaction.on(EventStateChanged(),
-              (EventStateChanged state) {
+              (_) {
             if (_request.server_transaction.state ==
                 TransactionState.TERMINATED) {
               sendRequest(SipMethod.BYE, <String, dynamic>{

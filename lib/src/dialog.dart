@@ -244,7 +244,7 @@ class Dialog {
 
       // RFC3261 12.2.2 Replace the dialog's remote target URI if the request is accepted.
       if (request.hasHeader('contact')) {
-        eventHandlers!.on(EventStateChanged(), (EventStateChanged state) {
+        eventHandlers!.on(EventStateChanged(), (_) {
           if (request.server_transaction!.state == TransactionState.ACCEPTED) {
             _remote_target = request.parseHeader('contact').uri;
           }
@@ -253,7 +253,7 @@ class Dialog {
     } else if (request.method == SipMethod.NOTIFY) {
       // RFC6665 3.2 Replace the dialog's remote target URI if the request is accepted.
       if (request.hasHeader('contact')) {
-        eventHandlers!.on(EventStateChanged(), (EventStateChanged state) {
+        eventHandlers!.on(EventStateChanged(), (_) {
           if (request.server_transaction!.state == TransactionState.COMPLETED) {
             _remote_target = request.parseHeader('contact').uri;
           }
