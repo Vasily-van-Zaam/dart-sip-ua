@@ -1365,7 +1365,7 @@ class RTCSession extends EventManager implements Owner {
                     status_code: request.status_code,
                     reason_phrase: request.reason_phrase));
           } else {
-            request.reply(403, 'Forbidden');
+            request.reply(403);
           }
           break;
         case SipMethod.INVITE:
@@ -1376,7 +1376,7 @@ class RTCSession extends EventManager implements Owner {
               _receiveReinvite(request);
             }
           } else {
-            request.reply(403, 'Forbidden');
+            request.reply(403);
           }
           break;
         case SipMethod.INFO:
@@ -1396,32 +1396,35 @@ class RTCSession extends EventManager implements Owner {
               request.reply(415);
             }
           } else {
-            request.reply(403, 'Forbidden');
+            request.reply(403);
           }
           break;
         case SipMethod.UPDATE:
           if (_status == C.STATUS_CONFIRMED) {
             _receiveUpdate(request);
           } else {
-            request.reply(403, 'Forbidden');
+            request.reply(403);
           }
           break;
         case SipMethod.REFER:
           if (_status == C.STATUS_CONFIRMED) {
             _receiveRefer(request);
           } else {
-            request.reply(403, 'Forbidden');
+            request.reply(403);
           }
           break;
         case SipMethod.NOTIFY:
           logger.d('SipMethod.NOTIFY status: $_status');
-          if (_status == C.STATUS_CONFIRMED ||
-              _status == C.STATUS_WAITING_FOR_ANSWER ||
+          if (_status == C.STATUS_CONFIRMED) {
+            _receiveNotifyRefer(request);
+          } else if (_status == C.STATUS_WAITING_FOR_ANSWER ||
+              _status == C.STATUS_WAITING_FOR_ACK ||
               _status == C.STATUS_ANSWERED) {
             _receiveNotify(request);
           } else {
-            request.reply(403, 'Forbidden');
+            request.reply(403);
           }
+
           break;
         default:
           request.reply(501);
@@ -2234,11 +2237,8 @@ class RTCSession extends EventManager implements Owner {
         }));
   }
 
-  /**
-   * In dialog Notify Reception
-   */
-  void _receiveNotify(IncomingRequest request) {
-    logger.d('receiveNotify()');
+  void _receiveNotifyRefer(IncomingRequest request) {
+    logger.d('receiveNotifyRefer()');
 
     if (request.event == null) {
       request.reply(400);
@@ -2246,40 +2246,54 @@ class RTCSession extends EventManager implements Owner {
 
     switch (request.event!.event) {
       case 'refer':
-        {
-          int? id;
-          ReferSubscriber? referSubscriber;
+        int? id;
+        ReferSubscriber? referSubscriber;
 
-          if (request.event!.params!['id'] != null) {
-            id = int.tryParse(request.event!.params!['id'], radix: 10);
-            referSubscriber = _referSubscribers[id];
-          } else if (_referSubscribers.length == 1) {
-            referSubscriber =
-                _referSubscribers[_referSubscribers.keys.toList()[0]];
-          } else {
-            request.reply(400, 'Missing event id parameter');
+        if (request.event!.params!['id'] != null) {
+          id = int.tryParse(request.event!.params!['id'], radix: 10);
+          referSubscriber = _referSubscribers[id];
+        } else if (_referSubscribers.length == 1) {
+          referSubscriber =
+              _referSubscribers[_referSubscribers.keys.toList()[0]];
+        } else {
+          request.reply(400, 'Missing event id parameter');
 
-            return;
-          }
-
-          if (referSubscriber == null) {
-            request.reply(481, 'Subscription does not exist');
-
-            return;
-          }
-
-          referSubscriber.receiveNotify(request);
-          request.reply(200);
-
-          break;
+          return;
         }
+
+        if (referSubscriber == null) {
+          request.reply(481, 'Subscription does not exist');
+
+          return;
+        }
+
+        referSubscriber.receiveNotify(request);
+        request.reply(200);
+
+        break;
+
       case 'talk':
         request.reply(200);
         break;
       default:
-        {
-          request.reply(489);
-        }
+        request.reply(489);
+    }
+  }
+
+  /**
+   * In dialog Notify Reception
+   */
+  void _receiveNotify(IncomingRequest request) {
+    logger.d('receiveNotify()');
+    if (request.event == null) {
+      request.reply(400);
+    }
+    switch (request.event!.event) {
+      case 'talk':
+        request.reply(200);
+        break;
+      default:
+        request.reply(489);
     }
   }
 
