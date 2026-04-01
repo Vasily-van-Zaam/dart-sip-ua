@@ -185,6 +185,16 @@ class SIPUAHelper extends EventManager {
         uaSettings.connectionRecoveryMaxInterval;
     _settings.connection_recovery_min_interval =
         uaSettings.connectionRecoveryMinInterval;
+    _settings.transport_options_probe_enabled =
+        uaSettings.transportOptionsProbeEnabled;
+    _settings.transport_options_probe_idle_sec =
+        uaSettings.transportOptionsProbeIdleSec;
+    _settings.transport_options_probe_response_timeout_sec =
+        uaSettings.transportOptionsProbeResponseTimeoutSec;
+    _settings.transport_options_probe_max_attempts =
+        uaSettings.transportOptionsProbeMaxAttempts;
+    _settings.transport_options_probe_target =
+        uaSettings.transportOptionsProbeTarget;
     _settings.terminateOnAudioMediaPortZero =
         uaSettings.terminateOnMediaPortZero;
 
@@ -192,8 +202,18 @@ class SIPUAHelper extends EventManager {
       _ua = UA(_settings);
       _ua!.on(EventSocketConnecting(), (EventSocketConnecting event) {
         logger.d('connecting => $event');
-        _notifyTransportStateListeners(
-            TransportState(TransportStateEnum.CONNECTING));
+        _notifyTransportStateListeners(TransportState(
+            TransportStateEnum.CONNECTING,
+            recoveryAttempt: event.recoveryAttempt));
+      });
+
+      _ua!.on(EventSocketReconnectScheduled(), (EventSocketReconnectScheduled event) {
+        logger.d(
+            'reconnect scheduled => attempt ${event.attempt} in ${event.delaySeconds}s');
+        _notifyTransportStateListeners(TransportState(
+            TransportStateEnum.RECONNECT_SCHEDULED,
+            recoveryAttempt: event.attempt,
+            reconnectAfter: Duration(seconds: event.delaySeconds)));
       });
 
       _ua!.on(EventSocketConnected(), (EventSocketConnected event) {
@@ -741,12 +761,21 @@ enum TransportStateEnum {
   CONNECTING,
   CONNECTED,
   DISCONNECTED,
+  /// Backoff running after [DISCONNECTED]; next state is usually [CONNECTING].
+  RECONNECT_SCHEDULED,
 }
 
 class TransportState {
-  TransportState(this.state, {this.cause});
+  TransportState(this.state,
+      {this.cause, this.recoveryAttempt, this.reconnectAfter});
   TransportStateEnum state;
   ErrorCause? cause;
+
+  /// From [EventSocketConnecting]: 0 = first connect, >0 = reconnect attempt index.
+  int? recoveryAttempt;
+
+  /// From [EventSocketReconnectScheduled]: delay before the stack calls connect again.
+  Duration? reconnectAfter;
 }
 
 class SIPMessageRequest {
@@ -803,6 +832,9 @@ class WebSocketSettings {
   /// Otherwise the used protocol will be used (for example WS for ws://
   /// or WSS for wss://, based on the given web socket URL).
   String? transport_scheme;
+
+  /// Max time to wait for websocket handshake while in CONNECTING state.
+  int connectionConnectTimeoutSec = 8;
 }
 
 class TcpSocketSettings {
@@ -901,6 +933,21 @@ class UaSettings {
 
   /// Sip Message Delay (in millisecond) (default 0).
   int sip_message_delay = 0;
+
+  /// Enable SIP OPTIONS probe when transport is idle.
+  bool transportOptionsProbeEnabled = false;
+
+  /// Idle threshold before sending OPTIONS probe.
+  int transportOptionsProbeIdleSec = 20;
+
+  /// Wait timeout for each OPTIONS probe response.
+  int transportOptionsProbeResponseTimeoutSec = 6;
+
+  /// Max consecutive OPTIONS probe attempts before disconnect.
+  int transportOptionsProbeMaxAttempts = 2;
+
+  /// Optional explicit OPTIONS target (fallback: account URI).
+  String? transportOptionsProbeTarget;
   List<Map<String, String>> iceServers = <Map<String, String>>[
     <String, String>{'urls': 'stun:stun.l.google.com:19302'},
 // turn server configuration example.

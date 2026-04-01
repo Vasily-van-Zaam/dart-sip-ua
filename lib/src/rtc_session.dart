@@ -828,6 +828,10 @@ class RTCSession extends EventManager implements Owner {
               });
               dialog.terminate();
             }
+            // Ensure callback is typed as `void Function(...)` (not returning `Null`),
+            // otherwise runtime may throw:
+            // "type '(EventStateChanged) => Null' is not a subtype of '(EventType) => void'"
+            return;
           });
 
           _ended(

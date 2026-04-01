@@ -277,7 +277,6 @@ class OutgoingRequest {
     msg += 'User-Agent: $userAgent\r\n';
 
     if (body != null) {
-      logger.d('Outgoing Message: $method body: $body');
       int length = utf8.encode(body!).length;
       msg += 'Content-Length: $length\r\n\r\n';
       msg += body!;

@@ -8,12 +8,22 @@ class EventSocketConnected extends EventType {
 }
 
 class EventSocketConnecting extends EventType {
-  EventSocketConnecting({this.socket});
+  EventSocketConnecting({this.socket, this.recoveryAttempt = 0});
   SIPUASocketInterface? socket;
+
+  /// 0 = initial connect; >0 = recovery after a drop (matches SocketTransport backoff).
+  int recoveryAttempt;
 }
 
 class EventSocketDisconnected extends EventType {
   EventSocketDisconnected({SIPUASocketInterface? socket, this.cause});
   SIPUASocketInterface? socket;
   ErrorCause? cause;
+}
+
+/// Emitted after a transport drop, before the next [EventSocketConnecting] (backoff timer).
+class EventSocketReconnectScheduled extends EventType {
+  EventSocketReconnectScheduled({this.attempt = 0, this.delaySeconds = 0});
+  int attempt;
+  int delaySeconds;
 }

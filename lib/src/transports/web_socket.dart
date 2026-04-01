@@ -44,6 +44,7 @@ class SIPUAWebSocket extends SIPUASocketInterface {
   SIPUAWebSocketImpl? _ws;
   bool _closed = false;
   bool _connected = false;
+  bool _disconnectEmitted = false;
   int? _weight;
   int? status;
   late WebSocketSettings _webSocketSettings;
@@ -85,6 +86,7 @@ class SIPUAWebSocket extends SIPUASocketInterface {
     }
     logger.d('connecting to WebSocket $_url');
     try {
+      _disconnectEmitted = false;
       _ws = SIPUAWebSocketImpl(_url!, _messageDelay);
 
       _ws!.onOpen = () {
@@ -98,10 +100,11 @@ class SIPUAWebSocket extends SIPUASocketInterface {
         _onMessage(data);
       };
 
-      _ws!.onClose = (int? closeCode, String? closeReason) {
-        logger.d('Closed [$closeCode, $closeReason]!');
+      _ws!.onClose = (int? closeCode, String? closeReason,
+          {required bool wasClean}) {
+        logger.d('Closed [$closeCode, $closeReason] clean=$wasClean');
         _connected = false;
-        _onClose(true, closeCode, closeReason);
+        _onClose(wasClean, closeCode, closeReason);
       };
 
       _ws!.connect(
@@ -165,8 +168,12 @@ class SIPUAWebSocket extends SIPUASocketInterface {
   }
 
   void _onClose(bool wasClean, int? code, String? reason) {
+    if (_disconnectEmitted) {
+      return;
+    }
+    _disconnectEmitted = true;
     logger.d('WebSocket $_url closed');
-    if (wasClean == false) {
+    if (!wasClean) {
       logger.d('WebSocket abrupt disconnection');
     }
     ondisconnect!(this, !wasClean, code, reason);

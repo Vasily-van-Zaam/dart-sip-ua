@@ -7,7 +7,8 @@ import 'package:sip_ua/src/sip_ua_helper.dart';
 import '../logger.dart';
 
 typedef OnMessageCallback = void Function(dynamic msg);
-typedef OnCloseCallback = void Function(int? code, String? reason);
+typedef OnCloseCallback = void Function(int? code, String? reason,
+    {required bool wasClean});
 typedef OnOpenCallback = void Function();
 
 class SIPUATcpSocketImpl {
@@ -45,10 +46,12 @@ class SIPUATcpSocketImpl {
       _socket!.listen((dynamic data) {
         onData?.call(data);
       }, onDone: () {
-        //  onClose?.call(_socket!., _socket!.closeReason);
+        onClose?.call(0, 'connection closed', wasClean: true);
+      }, onError: (Object e, StackTrace _) {
+        onClose?.call(500, e.toString(), wasClean: false);
       });
     } catch (e) {
-      onClose?.call(500, e.toString());
+      onClose?.call(500, e.toString(), wasClean: false);
     }
   }
 
@@ -70,6 +73,6 @@ class SIPUATcpSocketImpl {
   }
 
   void close() {
-    _socket!.close();
+    _socket?.close();
   }
 }

@@ -32,6 +32,7 @@ class SIPUATcpSocket extends SIPUASocketInterface {
   bool _closed = false;
   bool _connected = false;
   bool _connecting = false;
+  bool _disconnectEmitted = false;
   int? _weight;
   int? status;
   late TcpSocketSettings _tcpSocketSettings;
@@ -78,6 +79,7 @@ class SIPUATcpSocket extends SIPUASocketInterface {
     logger.d('connecting to TcpSocket $_host:$_port');
     _connecting = true;
     try {
+      _disconnectEmitted = false;
       _tcpSocketImpl = SIPUATcpSocketImpl(
           _messageDelay, _host ?? '0.0.0.0', _port ?? '5060');
 
@@ -93,11 +95,12 @@ class SIPUATcpSocket extends SIPUASocketInterface {
         _onMessage(data);
       };
 
-      _tcpSocketImpl!.onClose = (int? closeCode, String? closeReason) {
-        logger.d('Closed [$closeCode, $closeReason]!');
+      _tcpSocketImpl!.onClose = (int? closeCode, String? closeReason,
+          {required bool wasClean}) {
+        logger.d('Closed [$closeCode, $closeReason] clean=$wasClean');
         _connected = false;
         _connecting = false;
-        _onClose(true, closeCode, closeReason);
+        _onClose(wasClean, closeCode, closeReason);
       };
 
       _tcpSocketImpl!.connect(
@@ -156,8 +159,12 @@ class SIPUATcpSocket extends SIPUASocketInterface {
   }
 
   void _onClose(bool wasClean, int? code, String? reason) {
+    if (_disconnectEmitted) {
+      return;
+    }
+    _disconnectEmitted = true;
     logger.d('TcpSocket $_host:$port closed');
-    if (wasClean == false) {
+    if (!wasClean) {
       logger.d('TcpSocket abrupt disconnection');
     }
     ondisconnect!(this, !wasClean, code, reason);

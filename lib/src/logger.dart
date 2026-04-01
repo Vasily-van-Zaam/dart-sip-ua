@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 import 'package:logger/logger.dart';
 
@@ -66,18 +67,21 @@ class MyLogPrinter extends LogPrinter {
       }
     }
 
-    print(color(
-        '[$formattedDate] ${event.level} ${StackTraceNJ(skipFrames: depth).formatStackTrace(methodCount: 1)} ::: ${event.message}'));
+    debugPrint(
+      color(
+        '[$formattedDate] ${event.level} ${StackTraceNJ(skipFrames: depth).formatStackTrace(methodCount: 1)} ::: ${event.message}',
+      ),
+    );
     if (event.error != null) {
-      print('${event.error}');
+      debugPrint('${event.error}');
     }
 
     if (event.stackTrace != null) {
       if (event.stackTrace.runtimeType == StackTraceNJ) {
         StackTraceNJ st = event.stackTrace as StackTraceNJ;
-        print(color('$st'));
+        debugPrint(color('$st'));
       } else {
-        print(color('${event.stackTrace}'));
+        debugPrint(color('${event.stackTrace}'));
       }
     }
 

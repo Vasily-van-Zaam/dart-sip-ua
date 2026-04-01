@@ -52,6 +52,9 @@ class SocketTransport {
   Timer? _recovery_timer;
   bool _close_requested = false;
 
+  /// Fired when automatic reconnect backoff is scheduled (not for user [disconnect]).
+  void Function(int attempt, int delaySeconds)? onReconnectScheduled;
+
   late void Function(SIPUASocketInterface? socket, int? attempts) onconnecting;
   late void Function(SIPUASocketInterface? socket, ErrorCause cause)
       ondisconnect;
@@ -124,6 +127,15 @@ class SocketTransport {
             reason_phrase: 'close by local'));
   }
 
+  /// Force transport close but keep auto-recovery enabled.
+  /// Used by liveness/probe failures where reconnect is required.
+  void disconnectWithRecovery() {
+    logger.d('Transport close() with recovery');
+    _close_requested = false;
+    status = C.STATUS_DISCONNECTED;
+    socket.disconnect();
+  }
+
   bool send(dynamic data) {
     logger.d('Socket Transport send()');
 
@@ -163,6 +175,9 @@ class SocketTransport {
 
     logger.d(
         'reconnection attempt: $_recover_attempts. next connection attempt in $k seconds');
+
+    final int delaySecs = k is int ? k : k.toInt();
+    onReconnectScheduled?.call(_recover_attempts, delaySecs);
 
     _recovery_timer = setTimeout(() {
       if (!_close_requested && !(isConnected() || isConnecting())) {
@@ -230,22 +245,21 @@ class SocketTransport {
   }
 
   void _onDisconnect(
-      SIPUASocketInterface socket, bool error, int? closeCode, String? reason) {
+      SIPUASocketInterface droppedSocket, bool error, int? closeCode, String? reason) {
     status = C.STATUS_DISCONNECTED;
     ondisconnect(
-        socket,
+        droppedSocket,
         ErrorCause(
-            cause: 'error', status_code: closeCode, reason_phrase: reason));
+            cause: error ? 'error' : 'closed',
+            status_code: closeCode,
+            reason_phrase: reason));
 
     if (_close_requested) {
       return;
     }
-    // Update socket status.
-    else {
-      for (Map<String, dynamic> socket in _socketsMap) {
-        if (socket == socket['socket']) {
-          socket['status'] = C.SOCKET_STATUS_ERROR;
-        }
+    for (Map<String, dynamic> entry in _socketsMap) {
+      if (entry['socket'] == droppedSocket) {
+        entry['status'] = C.SOCKET_STATUS_ERROR;
       }
     }
 

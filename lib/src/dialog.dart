@@ -248,6 +248,7 @@ class Dialog {
           if (request.server_transaction!.state == TransactionState.ACCEPTED) {
             _remote_target = request.parseHeader('contact').uri;
           }
+          return;
         });
       }
     } else if (request.method == SipMethod.NOTIFY) {
@@ -257,6 +258,7 @@ class Dialog {
           if (request.server_transaction!.state == TransactionState.COMPLETED) {
             _remote_target = request.parseHeader('contact').uri;
           }
+          return;
         });
       }
     }

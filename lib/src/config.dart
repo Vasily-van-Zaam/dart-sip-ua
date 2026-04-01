@@ -70,6 +70,13 @@ class Settings {
   /// Sip Message Delay (in millisecond) ( default 0 ).
   int sip_message_delay = 0;
 
+  /// SIP OPTIONS based transport probe settings (idle -> OPTIONS -> timeout).
+  bool transport_options_probe_enabled = false;
+  int transport_options_probe_idle_sec = 20;
+  int transport_options_probe_response_timeout_sec = 6;
+  int transport_options_probe_max_attempts = 2;
+  String? transport_options_probe_target;
+
   /// When true (default), advertise ICE in SIP: `Supported: ...ice...` and
   /// `;+sip.ice` on REGISTER Contact (RFC 5768). Set false if the PBX must not
   /// treat the UA as ICE-capable (SDP may still contain ICE lines from WebRTC).
@@ -268,6 +275,32 @@ class Checks {
     },
     'ice_gathering_timeout': (Settings src, Settings? dst) {
       dst!.ice_gathering_timeout = src.ice_gathering_timeout;
+    },
+    'transport_options_probe_enabled': (Settings src, Settings? dst) {
+      dst!.transport_options_probe_enabled = src.transport_options_probe_enabled;
+    },
+    'transport_options_probe_idle_sec': (Settings src, Settings? dst) {
+      final int value = src.transport_options_probe_idle_sec;
+      if (value > 0) {
+        dst!.transport_options_probe_idle_sec = value;
+      }
+    },
+    'transport_options_probe_response_timeout_sec': (Settings src, Settings? dst) {
+      final int value = src.transport_options_probe_response_timeout_sec;
+      if (value > 0) {
+        dst!.transport_options_probe_response_timeout_sec = value;
+      }
+    },
+    'transport_options_probe_max_attempts': (Settings src, Settings? dst) {
+      final int value = src.transport_options_probe_max_attempts;
+      if (value > 0) {
+        dst!.transport_options_probe_max_attempts = value;
+      }
+    },
+    'transport_options_probe_target': (Settings src, Settings? dst) {
+      final String? value = src.transport_options_probe_target;
+      if (value == null || value.trim().isEmpty) return;
+      dst!.transport_options_probe_target = value.trim();
     }
   };
 }

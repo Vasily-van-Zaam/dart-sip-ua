@@ -143,21 +143,22 @@ class Options extends EventManager with Applicant {
   }
 
   void _receiveResponse(IncomingResponse? response) {
-    if (_closed != null) {
+    if (_closed) {
       return;
     }
-    if (RegExp(r'^1[0-9]{2}$').hasMatch(response!.status_code)) {
+    final int statusCode = response?.status_code ?? 0;
+    if (statusCode >= 100 && statusCode < 200) {
       // Ignore provisional responses.
-    } else if (RegExp(r'^2[0-9]{2}$').hasMatch(response.status_code)) {
+    } else if (statusCode >= 200 && statusCode < 300) {
       _succeeded('remote', response);
     } else {
-      String cause = Utils.sipErrorCause(response.status_code);
-      _failed('remote', response.status_code, cause, response.reason_phrase);
+      String cause = Utils.sipErrorCause(statusCode);
+      _failed('remote', statusCode, cause, response?.reason_phrase);
     }
   }
 
   void _onRequestTimeout() {
-    if (_closed != null) {
+    if (_closed) {
       return;
     }
     _failed(
@@ -165,7 +166,7 @@ class Options extends EventManager with Applicant {
   }
 
   void _onTransportError() {
-    if (_closed != null) {
+    if (_closed) {
       return;
     }
     _failed('system', 500, DartSIP_C.CausesType.CONNECTION_ERROR,

@@ -7,7 +7,8 @@ import 'package:sip_ua/src/sip_ua_helper.dart';
 import '../logger.dart';
 
 typedef OnMessageCallback = void Function(dynamic msg);
-typedef OnCloseCallback = void Function(int? code, String? reason);
+typedef OnCloseCallback = void Function(int? code, String? reason,
+    {required bool wasClean});
 typedef OnOpenCallback = void Function();
 
 class SIPUAWebSocketImpl {
@@ -19,28 +20,42 @@ class SIPUAWebSocketImpl {
   OnMessageCallback? onMessage;
   OnCloseCallback? onClose;
   final int messageDelay;
+  bool _closeEmitted = false;
   void connect(
       {Iterable<String>? protocols,
       required WebSocketSettings webSocketSettings}) async {
+    _closeEmitted = false;
     handleQueue();
     logger.i('connect $_url, ${webSocketSettings.extraHeaders}, $protocols');
     try {
+      final int connectTimeoutSec = webSocketSettings.connectionConnectTimeoutSec;
+      final Duration connectTimeout = Duration(
+          seconds: connectTimeoutSec > 0 ? connectTimeoutSec : 8);
       if (webSocketSettings.allowBadCertificate) {
         /// Allow self-signed certificate, for test only.
-        _socket = await _connectForBadCertificate(_url, webSocketSettings);
+        _socket = await _connectForBadCertificate(_url, webSocketSettings)
+            .timeout(connectTimeout);
       } else {
         _socket = await WebSocket.connect(_url,
-            protocols: protocols, headers: webSocketSettings.extraHeaders);
+                protocols: protocols, headers: webSocketSettings.extraHeaders)
+            .timeout(connectTimeout);
       }
 
       onOpen?.call();
       _socket!.listen((dynamic data) {
         onMessage?.call(data);
       }, onDone: () {
-        onClose?.call(_socket!.closeCode, _socket!.closeReason);
+        final int? code = _socket?.closeCode;
+        final String reason = _socket?.closeReason ?? '';
+        final bool clean = code == 1000 || code == 1001;
+        _emitClose(code, reason, wasClean: clean);
+      }, onError: (Object e, StackTrace _) {
+        _emitClose(499, e.toString(), wasClean: false);
       });
+    } on TimeoutException {
+      _emitClose(408, 'connect timeout', wasClean: false);
     } catch (e) {
-      onClose?.call(500, e.toString());
+      _emitClose(500, e.toString(), wasClean: false);
     }
   }
 
@@ -67,6 +82,14 @@ class SIPUAWebSocketImpl {
 
   bool isConnecting() {
     return _socket != null && _socket!.readyState == WebSocket.connecting;
+  }
+
+  void _emitClose(int? code, String? reason, {required bool wasClean}) {
+    if (_closeEmitted) {
+      return;
+    }
+    _closeEmitted = true;
+    onClose?.call(code, reason, wasClean: wasClean);
   }
 
   /// For test only.

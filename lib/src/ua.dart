@@ -140,6 +140,11 @@ class UA extends EventManager {
 
   // Flag that indicates whether UA is currently stopping
   bool _stopping = false;
+  DateTime _lastTransportActivityAt = DateTime.now();
+  Timer? _transportOptionsProbeTimer;
+  Timer? _transportOptionsProbeResponseTimer;
+  Options? _transportOptionsProbeInFlight;
+  int _transportOptionsProbeAttempt = 0;
 
   // ============
   //  High Level API
@@ -309,6 +314,7 @@ class UA extends EventManager {
    */
   void stop() {
     logger.d('stop()');
+    _stopTransportOptionsProbe();
 
     // Remove dynamic settings.
     _dynConfiguration = null;
@@ -863,6 +869,7 @@ class UA extends EventManager {
       _socketTransport!.onconnect = onTransportConnect;
       _socketTransport!.ondisconnect = onTransportDisconnect;
       _socketTransport!.ondata = onTransportData;
+      _socketTransport!.onReconnectScheduled = onTransportReconnectScheduled;
     } catch (e) {
       logger.e('Failed to _loadConfig: ${e.toString()}');
       throw Exceptions.ConfigurationError('sockets', _configuration.sockets);
@@ -920,8 +927,15 @@ class UA extends EventManager {
 
 // Transport connecting event.
   void onTransportConnecting(SIPUASocketInterface? socket, int? attempts) {
-    logger.d('Transport connecting');
-    emit(EventSocketConnecting(socket: socket));
+    logger.d('Transport connecting (recoveryAttempt: ${attempts ?? 0})');
+    emit(EventSocketConnecting(
+        socket: socket, recoveryAttempt: attempts ?? 0));
+  }
+
+  void onTransportReconnectScheduled(int attempt, int delaySeconds) {
+    logger.d('Transport reconnect scheduled in ${delaySeconds}s (attempt $attempt)');
+    emit(EventSocketReconnectScheduled(
+        attempt: attempt, delaySeconds: delaySeconds));
   }
 
 // Transport connected event.
@@ -934,6 +948,8 @@ class UA extends EventManager {
     _error = null;
 
     emit(EventSocketConnected(socket: transport.socket));
+    _lastTransportActivityAt = DateTime.now();
+    _startTransportOptionsProbe();
 
     if (_dynConfiguration!.register!) {
       _registrator.register();
@@ -942,6 +958,7 @@ class UA extends EventManager {
 
 // Transport disconnected event.
   void onTransportDisconnect(SIPUASocketInterface? socket, ErrorCause cause) {
+    _stopTransportOptionsProbe();
     // Run _onTransportError_ callback on every client transaction using _transport_.
     _transactions.removeAll().forEach((TransactionBase transaction) {
       transaction.onTransportError();
@@ -960,6 +977,7 @@ class UA extends EventManager {
 
 // Transport data event.
   void onTransportData(SocketTransport transport, String messageData) {
+    _lastTransportActivityAt = DateTime.now();
     IncomingMessage? message = Parser.parseMessage(messageData, this);
 
     if (message == null) {
@@ -1006,6 +1024,156 @@ class UA extends EventManager {
           break;
       }
     }
+  }
+
+  bool _isTransportOptionsProbeEnabled() {
+    return _configuration.transport_options_probe_enabled;
+  }
+
+  String _transportOptionsProbeTarget() {
+    final configured = _configuration.transport_options_probe_target;
+    if (configured != null && configured.trim().isNotEmpty) {
+      return configured.trim();
+    }
+    return _configuration.uri.toString();
+  }
+
+  void _startTransportOptionsProbe() {
+    _stopTransportOptionsProbe();
+    if (!_isTransportOptionsProbeEnabled()) {
+      return;
+    }
+    _lastTransportActivityAt = DateTime.now();
+    _transportOptionsProbeTimer =
+        Timer.periodic(const Duration(seconds: 1), (_) {
+      _checkTransportOptionsProbe();
+    });
+  }
+
+  void _stopTransportOptionsProbe() {
+    _transportOptionsProbeTimer?.cancel();
+    _transportOptionsProbeTimer = null;
+    _transportOptionsProbeResponseTimer?.cancel();
+    _transportOptionsProbeResponseTimer = null;
+    try {
+      _transportOptionsProbeInFlight?.close();
+    } catch (_) {}
+    _transportOptionsProbeInFlight = null;
+    _transportOptionsProbeAttempt = 0;
+  }
+
+  void _checkTransportOptionsProbe() {
+    if (!_isTransportOptionsProbeEnabled()) {
+      return;
+    }
+    if (_status != C.STATUS_READY) {
+      return;
+    }
+    if (_socketTransport == null || !_socketTransport!.isConnected()) {
+      return;
+    }
+    if (_transportOptionsProbeInFlight != null) {
+      return;
+    }
+    final int idleSec = _configuration.transport_options_probe_idle_sec > 0
+        ? _configuration.transport_options_probe_idle_sec
+        : 20;
+    final int idleFor =
+        DateTime.now().difference(_lastTransportActivityAt).inSeconds;
+    if (idleFor < idleSec) {
+      return;
+    }
+    _sendTransportOptionsProbe();
+  }
+
+  void _sendTransportOptionsProbe() {
+    if (_transportOptionsProbeInFlight != null) {
+      return;
+    }
+    final int maxAttempts = _configuration.transport_options_probe_max_attempts > 0
+        ? _configuration.transport_options_probe_max_attempts
+        : 2;
+    if (_transportOptionsProbeAttempt >= maxAttempts) {
+      logger.w(
+          'Transport OPTIONS probe failed ${_transportOptionsProbeAttempt}/$maxAttempts. Disconnecting transport with recovery.');
+      _socketTransport?.disconnectWithRecovery();
+      _transportOptionsProbeAttempt = 0;
+      return;
+    }
+    _transportOptionsProbeAttempt += 1;
+    final int attempt = _transportOptionsProbeAttempt;
+
+    final EventManager handlers = EventManager();
+    handlers.on(EventSucceeded(), (EventSucceeded _) {
+      _onTransportOptionsProbeSuccess();
+    });
+    handlers.on(EventCallFailed(), (EventCallFailed _) {
+      _onTransportOptionsProbeFailure();
+    });
+
+    try {
+      logger.w(
+          'Transport idle detected. Sending OPTIONS probe attempt $attempt/$maxAttempts');
+      _transportOptionsProbeInFlight = sendOptions(
+        _transportOptionsProbeTarget(),
+        'ping',
+        <String, dynamic>{
+          'eventHandlers': handlers,
+          'contentType': 'text/plain',
+        },
+      );
+      _startTransportOptionsProbeResponseTimer();
+    } catch (e) {
+      logger.w('OPTIONS probe send failed: $e');
+      _onTransportOptionsProbeFailure();
+    }
+  }
+
+  void _startTransportOptionsProbeResponseTimer() {
+    _transportOptionsProbeResponseTimer?.cancel();
+    final int timeoutSec =
+        _configuration.transport_options_probe_response_timeout_sec > 0
+            ? _configuration.transport_options_probe_response_timeout_sec
+            : 6;
+    _transportOptionsProbeResponseTimer =
+        Timer(Duration(seconds: timeoutSec), () {
+      logger.w('OPTIONS probe response timeout after ${timeoutSec}s');
+      try {
+        _transportOptionsProbeInFlight?.close();
+      } catch (_) {}
+      _transportOptionsProbeInFlight = null;
+      _onTransportOptionsProbeFailure();
+    });
+  }
+
+  void _onTransportOptionsProbeSuccess() {
+    _transportOptionsProbeResponseTimer?.cancel();
+    _transportOptionsProbeResponseTimer = null;
+    _transportOptionsProbeInFlight = null;
+    _transportOptionsProbeAttempt = 0;
+    _lastTransportActivityAt = DateTime.now();
+    logger.d('OPTIONS probe succeeded');
+  }
+
+  void _onTransportOptionsProbeFailure() {
+    _transportOptionsProbeResponseTimer?.cancel();
+    _transportOptionsProbeResponseTimer = null;
+    try {
+      _transportOptionsProbeInFlight?.close();
+    } catch (_) {}
+    _transportOptionsProbeInFlight = null;
+
+    final int maxAttempts = _configuration.transport_options_probe_max_attempts > 0
+        ? _configuration.transport_options_probe_max_attempts
+        : 2;
+    if (_transportOptionsProbeAttempt >= maxAttempts) {
+      logger.w(
+          'OPTIONS probe failed ${_transportOptionsProbeAttempt}/$maxAttempts. Marking transport as lost and scheduling recovery.');
+      _socketTransport?.disconnectWithRecovery();
+      _transportOptionsProbeAttempt = 0;
+      return;
+    }
+    _sendTransportOptionsProbe();
   }
 }
 

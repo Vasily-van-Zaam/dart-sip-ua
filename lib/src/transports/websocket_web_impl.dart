@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:html';
 import 'dart:js_util' as JSUtils;
 
@@ -5,7 +6,8 @@ import 'package:sip_ua/src/sip_ua_helper.dart';
 import '../logger.dart';
 
 typedef OnMessageCallback = void Function(dynamic msg);
-typedef OnCloseCallback = void Function(int? code, String? reason);
+typedef OnCloseCallback = void Function(int? code, String? reason,
+    {required bool wasClean});
 typedef OnOpenCallback = void Function();
 
 class SIPUAWebSocketImpl {
@@ -17,14 +19,31 @@ class SIPUAWebSocketImpl {
   OnMessageCallback? onMessage;
   OnCloseCallback? onClose;
   final int messageDelay;
+  bool _closeEmitted = false;
+  Timer? _connectTimeoutTimer;
 
   void connect(
       {Iterable<String>? protocols,
       required WebSocketSettings webSocketSettings}) async {
+    _closeEmitted = false;
     logger.i('connect $_url, ${webSocketSettings.extraHeaders}, $protocols');
     try {
+      final int connectTimeoutSec = webSocketSettings.connectionConnectTimeoutSec;
+      final Duration connectTimeout =
+          Duration(seconds: connectTimeoutSec > 0 ? connectTimeoutSec : 8);
       _socket = WebSocket(_url, 'sip');
+      _connectTimeoutTimer?.cancel();
+      _connectTimeoutTimer = Timer(connectTimeout, () {
+        if (_socket != null && _socket!.readyState == WebSocket.CONNECTING) {
+          try {
+            _socket!.close();
+          } catch (_) {}
+          _emitClose(408, 'connect timeout', wasClean: false);
+        }
+      });
       _socket!.onOpen.listen((Event e) {
+        _connectTimeoutTimer?.cancel();
+        _connectTimeoutTimer = null;
         onOpen?.call();
       });
 
@@ -40,10 +59,14 @@ class SIPUAWebSocketImpl {
       });
 
       _socket!.onClose.listen((CloseEvent e) {
-        onClose?.call(e.code, e.reason);
+        _connectTimeoutTimer?.cancel();
+        _connectTimeoutTimer = null;
+        _emitClose(e.code, e.reason, wasClean: e.wasClean ?? false);
       });
     } catch (e) {
-      onClose?.call(0, e.toString());
+      _connectTimeoutTimer?.cancel();
+      _connectTimeoutTimer = null;
+      _emitClose(0, e.toString(), wasClean: false);
     }
   }
 
@@ -61,6 +84,16 @@ class SIPUAWebSocketImpl {
   }
 
   void close() {
-    _socket!.close();
+    _connectTimeoutTimer?.cancel();
+    _connectTimeoutTimer = null;
+    _socket?.close();
+  }
+
+  void _emitClose(int? code, String? reason, {required bool wasClean}) {
+    if (_closeEmitted) {
+      return;
+    }
+    _closeEmitted = true;
+    onClose?.call(code, reason, wasClean: wasClean);
   }
 }
