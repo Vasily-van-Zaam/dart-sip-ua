@@ -144,9 +144,12 @@ class SIPUAHelper extends EventManager {
     _settings.sockets = <SIPUASocketInterface>[];
 
     if (uaSettings.transportType == TransportType.TCP) {
-      SIPUATcpSocket socket = SIPUATcpSocket(
-          uaSettings.host ?? '0.0.0.0', uaSettings.port ?? '5060',
-          messageDelay: 1);
+      final SIPUATcpSocket socket = SIPUATcpSocket(
+        uaSettings.host ?? '0.0.0.0',
+        uaSettings.port ?? '5060',
+        messageDelay: uaSettings.sip_message_delay,
+        tcpSocketSettings: uaSettings.tcpSocketSettings,
+      );
       _settings.sockets!.add(socket);
     }
 
@@ -847,6 +850,10 @@ class TcpSocketSettings {
   /// Don‘t check the server certificate
   /// for self-signed certificate.
   bool allowBadCertificate = false;
+
+  /// If set, `Socket.connect` uses this local IPv4/IPv6 so Via/Contact match the
+  /// intended interface (e.g. Wi‑Fi) instead of a VPN address in the PBX subnet.
+  String? localBindHost;
 }
 
 enum DtmfMode {

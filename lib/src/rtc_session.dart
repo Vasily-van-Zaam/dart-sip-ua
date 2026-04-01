@@ -109,6 +109,35 @@ class RTCSession extends EventManager implements Owner {
   // Is late SDP being negotiated.
   bool _late_sdp = false;
 
+  /// Set while answering an **incoming** call whose offer was legacy RTP/AVP and
+  /// was shimmed with local ICE/DTLS for WebRTC. After ACK we send one re-INVITE
+  /// so FreeSWITCH returns a real SRTP answer; without that, media often stays
+  /// silent until a manual hold/unhold renegotiation.
+  bool _needsPostAckMediaRenegotiation = false;
+
+  /// Coalesces ICE-restart renegotiations and staggers them when several calls are up
+  /// (attended transfer), avoiding overlapping re-INVITEs on the same TCP leg.
+  Timer? _iceRestartDebounceTimer;
+
+  /// One in-dialog client re-INVITE at a time **for this session** (RFC 3261).
+  /// UA-global serialization wrongly blocked re-INVITEs on other dialogs sharing
+  /// one TCP/WSS transport (attended transfer: hold leg + consult leg).
+  Future<void> _serializedClientReinviteChain = Future<void>.value();
+
+  Future<void> _runSerializedClientReinvite(Future<void> Function() work) {
+    final Future<void> f = _serializedClientReinviteChain.then((_) async {
+      try {
+        await work();
+      } catch (e, st) {
+        logger.e('runSerializedClientReinvite failed: $e',
+            error: e, stackTrace: st);
+      }
+    });
+    _serializedClientReinviteChain =
+        f.catchError((Object _, StackTrace __) => Future<void>.value());
+    return f;
+  }
+
   // Default rtcOfferConstraints and rtcAnswerConstrainsts (passed in connect() or answer()).
   Map<String, dynamic>? _rtcOfferConstraints;
   Map<String, dynamic>? _rtcAnswerConstraints;
@@ -642,7 +671,7 @@ class RTCSession extends EventManager implements Owner {
     if (_late_sdp) return;
 
     logger.d('emit "sdp"');
-    final String? processedSDP = _sdpOfferToWebRTC(request.body);
+    final String? processedSDP = await _sdpOfferToWebRtcAsync(request.body);
     emit(EventSdp(originator: 'remote', type: 'offer', sdp: processedSDP));
 
     RTCSessionDescription offer = RTCSessionDescription(processedSDP, 'offer');
@@ -661,8 +690,8 @@ class RTCSession extends EventManager implements Owner {
       logger.e(
           'emit "peerconnection:setremotedescriptionfailed" [error:${error.toString()}]');
       emit(EventSetRemoteDescriptionFailed(exception: error));
-      throw Exceptions.TypeError(
-          'peerconnection.setRemoteDescription() failed');
+      // [answer] is not always awaited by app code; do not throw into an unhandled zone.
+      return;
     }
 
     // Create local description.
@@ -783,13 +812,15 @@ class RTCSession extends EventManager implements Owner {
       case C.STATUS_CONFIRMED:
         logger.d('terminating session');
 
+        final bool skipBye = options['skipBye'] == true;
+
         reason_phrase = options['reason_phrase'] as String? ??
             DartSIP_C.REASON_PHRASE[status_code ?? 0];
 
         if (status_code != null && (status_code < 200 || status_code >= 700)) {
           throw Exceptions.InvalidStateError(
               'Invalid status_code: $status_code');
-        } else if (status_code != null) {
+        } else if (status_code != null && !skipBye) {
           extraHeaders
               .add('Reason: SIP ;case=$status_code; text="$reason_phrase"');
         }
@@ -847,6 +878,19 @@ class RTCSession extends EventManager implements Owner {
 
           // Restore the dialog into 'ua' so the ACK can reach 'this' session.
           _ua.newDialog(dialog);
+        } else if (skipBye) {
+          // 408/481 on in-dialog request: peer no longer has this dialog (RFC 3261
+          // §12.2.1.2). Do not send BYE — it yields 481 "Call Does Not Exist".
+          logger.d('terminating session (skip BYE: peer dialog already cleared)');
+          final int sc = status_code ?? 481;
+          final String phrase = reason_phrase ?? 'Dialog Error';
+          _ended(
+              'remote',
+              null,
+              ErrorCause(
+                  cause: cause as String?,
+                  status_code: sc,
+                  reason_phrase: phrase));
         } else {
           sendRequest(SipMethod.BYE,
               <String, dynamic>{'extraHeaders': extraHeaders, 'body': body});
@@ -1079,7 +1123,11 @@ class RTCSession extends EventManager implements Owner {
     } else {
       _sendReinvite(<String, dynamic>{
         'eventHandlers': handlers,
-        'extraHeaders': options['extraHeaders']
+        'extraHeaders': options['extraHeaders'],
+        // Hold offers may be port 9 / no ICE per stack; skipping re-INVITE
+        // breaks attended transfer (one leg must be on hold for FS).
+        'bypassReinviteSdpViability': true,
+        'icePoisonReinviteMaxRetries': 8,
       });
     }
 
@@ -1130,7 +1178,9 @@ class RTCSession extends EventManager implements Owner {
     } else {
       _sendReinvite(<String, dynamic>{
         'eventHandlers': handlers,
-        'extraHeaders': options['extraHeaders']
+        'extraHeaders': options['extraHeaders'],
+        'bypassReinviteSdpViability': true,
+        'icePoisonReinviteMaxRetries': 8,
       });
     }
 
@@ -1218,7 +1268,15 @@ class RTCSession extends EventManager implements Owner {
         _sendReinvite(<String, dynamic>{
           'eventHandlers': handlers,
           'rtcOfferConstraints': rtcOfferConstraints,
-          'extraHeaders': options['extraHeaders']
+          'extraHeaders': options['extraHeaders'],
+          // After REFER/replace, WebRTC often needs a few ms before candidates
+          // appear; a single offer can be m=audio 9 / no a=candidate — retry
+          // instead of skipping re-INVITE (else RTP times out on same TCP).
+          'icePoisonReinviteMaxRetries': 10,
+          // Short delays + recreateOffer are not enough: trickle updates the
+          // existing local description. Poll getLocalDescription until ICE
+          // populates or timeout (attended-transfer consult leg).
+          'reinviteIcePollMaxMs': 5000,
         });
       }
     }
@@ -1462,16 +1520,31 @@ class RTCSession extends EventManager implements Owner {
     }
   }
 
-  void onDialogError() {
+  void onDialogError([IncomingMessage? dialogErrorResponse]) {
     logger.e('onDialogError()');
 
-    if (_status != C.STATUS_TERMINATED) {
-      terminate(<String, dynamic>{
-        'status_code': 500,
-        'reason_phrase': DartSIP_C.CausesType.DIALOG_ERROR,
-        'cause': DartSIP_C.CausesType.DIALOG_ERROR
-      });
+    if (_status == C.STATUS_TERMINATED) {
+      return;
     }
+    final int? code = dialogErrorResponse is IncomingResponse
+        ? dialogErrorResponse.status_code
+        : null;
+    // Dialog layer maps 408/481 to EventOnDialogError — peer cleared the dialog.
+    if (code == 481 || code == 408) {
+      terminate(<String, dynamic>{
+        'skipBye': true,
+        'status_code': code,
+        'reason_phrase': dialogErrorResponse?.reason_phrase ??
+            DartSIP_C.CausesType.DIALOG_ERROR,
+        'cause': DartSIP_C.CausesType.DIALOG_ERROR,
+      });
+      return;
+    }
+    terminate(<String, dynamic>{
+      'status_code': 500,
+      'reason_phrase': DartSIP_C.CausesType.DIALOG_ERROR,
+      'cause': DartSIP_C.CausesType.DIALOG_ERROR
+    });
   }
 
   // Called from DTMF handler.
@@ -1548,6 +1621,8 @@ class RTCSession extends EventManager implements Owner {
     clearTimeout(_timers.expiresTimer);
     clearTimeout(_timers.invite2xxTimer);
     clearTimeout(_timers.userNoAnswerTimer);
+    _iceRestartDebounceTimer?.cancel();
+    _iceRestartDebounceTimer = null;
 
     // Clear Session Timers.
     clearTimeout(_sessionTimers.timer);
@@ -1622,14 +1697,28 @@ class RTCSession extends EventManager implements Owner {
     }, Timers.TIMER_H);
   }
 
-  void _iceRestart() async {
-    Map<String, dynamic> offerConstraints = _rtcOfferConstraints ??
-        <String, dynamic>{
-          'mandatory': <String, dynamic>{},
-          'optional': <dynamic>[],
-        };
-    offerConstraints['mandatory']['IceRestart'] = true;
-    renegotiate(options: offerConstraints);
+  void _iceRestart() {
+    _iceRestartDebounceTimer?.cancel();
+    final int baseDebounceMs = 380;
+    final int staggerMs = _ua.activeSessionCount > 1
+        ? 120 + (identityHashCode(this) % 520)
+        : 0;
+    _iceRestartDebounceTimer =
+        Timer(Duration(milliseconds: baseDebounceMs + staggerMs), () {
+      _iceRestartDebounceTimer = null;
+      if (_status == C.STATUS_TERMINATED || _connection == null) {
+        return;
+      }
+      final Map<String, dynamic> offerConstraints = _rtcOfferConstraints ??
+          <String, dynamic>{
+            'mandatory': <String, dynamic>{},
+            'optional': <dynamic>[],
+          };
+      offerConstraints['mandatory']['IceRestart'] = true;
+      if (!renegotiate(options: offerConstraints)) {
+        logger.d('ICE restart renegotiate skipped (dialog busy or not ready)');
+      }
+    });
   }
 
   Future<void> _createRTCConnection(Map<String, dynamic> pcConfig,
@@ -1680,6 +1769,10 @@ class RTCSession extends EventManager implements Owner {
   Future<RTCSessionDescription> _createLocalDescription(
       String type, Map<String, dynamic>? constraints) async {
     logger.d('createLocalDescription()');
+    if (_connection == null || _status == C.STATUS_TERMINATED) {
+      throw Exceptions.InvalidStateError(
+          'createLocalDescription() | peer connection gone or session ended');
+    }
     _iceGatheringState ??= RTCIceGatheringState.RTCIceGatheringStateNew;
     Completer<RTCSessionDescription> completer =
         Completer<RTCSessionDescription>();
@@ -1732,17 +1825,31 @@ class RTCSession extends EventManager implements Owner {
     }
 
     Future<void> ready() async {
-      if (!finished && _status != C.STATUS_TERMINATED) {
-        finished = true;
-        _connection!.onIceCandidate = null;
-        _connection!.onIceGatheringState = null;
-        _iceGatheringState = RTCIceGatheringState.RTCIceGatheringStateComplete;
-        _rtcReady = true;
-        RTCSessionDescription? desc = await _connection!.getLocalDescription();
-        logger.d('emit "sdp"');
-        emit(EventSdp(originator: 'local', type: type, sdp: desc!.sdp));
-        completer.complete(desc);
+      if (finished || _status == C.STATUS_TERMINATED) {
+        return;
       }
+      final RTCPeerConnection? pc = _connection;
+      if (pc == null) {
+        if (!completer.isCompleted) {
+          completer.completeError(Exceptions.InvalidStateError(
+              'createLocalDescription() | peer connection disposed'));
+        }
+        return;
+      }
+      finished = true;
+      pc.onIceCandidate = null;
+      pc.onIceGatheringState = null;
+      _iceGatheringState = RTCIceGatheringState.RTCIceGatheringStateComplete;
+      _rtcReady = true;
+      RTCSessionDescription? gathered = await pc.getLocalDescription();
+      if (gathered == null) {
+        completer.completeError(Exceptions.InvalidStateError(
+            'createLocalDescription() | missing local SDP'));
+        return;
+      }
+      logger.d('emit "sdp"');
+      emit(EventSdp(originator: 'local', type: type, sdp: gathered.sdp));
+      completer.complete(gathered);
     }
 
     _connection!.onIceGatheringState = (RTCIceGatheringState state) {
@@ -2111,7 +2218,7 @@ class RTCSession extends EventManager implements Owner {
     }
 
     logger.d('emit "sdp"');
-    final String? processedSDP = _sdpOfferToWebRTC(request.body);
+    final String? processedSDP = await _sdpOfferToWebRtcAsync(request.body);
     emit(EventSdp(originator: 'remote', type: 'offer', sdp: processedSDP));
 
     RTCSessionDescription offer = RTCSessionDescription(processedSDP, 'offer');
@@ -2271,8 +2378,10 @@ class RTCSession extends EventManager implements Owner {
           return;
         }
 
-        referSubscriber.receiveNotify(request);
+        // Ack NOTIFY before emitting EventReferAccepted so FS sees 200 OK
+        // before any app handler that may BYE the dialog.
         request.reply(200);
+        referSubscriber.receiveNotify(request);
 
         break;
 
@@ -2622,111 +2731,205 @@ class RTCSession extends EventManager implements Owner {
     }
   }
 
+  /// While local offer is ICE-poison (e.g. m=audio 9), the same offer often
+  /// becomes valid as candidates arrive — without a new createOffer.
+  Future<String?> _pollMangledOfferUntilIceNotPoison(Duration maxWait) async {
+    final DateTime deadline = DateTime.now().add(maxWait);
+    while (DateTime.now().isBefore(deadline)) {
+      if (_status == C.STATUS_TERMINATED || _connection == null) {
+        return null;
+      }
+      final RTCSessionDescription? loc = await _connection!.getLocalDescription();
+      if (loc?.sdp != null) {
+        final String? mangled = _mangleOffer(loc!.sdp);
+        if (mangled != null && !_isReinviteOfferSdpIcePoison(mangled)) {
+          return mangled;
+        }
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    return null;
+  }
+
   /**
    * Send Re-INVITE
    */
   void _sendReinvite([Map<String, dynamic>? options]) async {
     logger.d('sendReinvite()');
+    final Map<String, dynamic> opts = options ?? <String, dynamic>{};
 
-    options = options ?? <String, dynamic>{};
+    await _runSerializedClientReinvite(() async {
+      final Completer<void> inviteTransactionDone = Completer<void>();
+      void markInviteTransactionDone() {
+        if (!inviteTransactionDone.isCompleted) {
+          inviteTransactionDone.complete();
+        }
+      }
 
-    List<dynamic> extraHeaders = options['extraHeaders'] != null
-        ? utils.cloneArray(options['extraHeaders'])
-        : <dynamic>[];
-    EventManager eventHandlers = options['eventHandlers'] ?? EventManager();
-    Map<String, dynamic>? rtcOfferConstraints =
-        options['rtcOfferConstraints'] ?? _rtcOfferConstraints;
-
-    bool succeeded = false;
-
-    extraHeaders.add('Contact: $_contact');
-    extraHeaders.add('Content-Type: application/sdp');
-
-    // Session Timers.
-    if (_sessionTimers.running) {
-      extraHeaders.add(
-          'Session-Expires: ${_sessionTimers.currentExpires};refresher=${_sessionTimers.refresher ? 'uac' : 'uas'}');
-    }
-
-    void onFailed([dynamic response]) {
-      eventHandlers.emit(EventCallFailed(session: this, response: response));
-    }
-
-    void onSucceeded(IncomingResponse? response) async {
-      if (_status == C.STATUS_TERMINATED) {
+      if (_status == C.STATUS_TERMINATED || _connection == null) {
+        markInviteTransactionDone();
         return;
       }
 
-      sendRequest(SipMethod.ACK);
+      List<dynamic> extraHeaders = opts['extraHeaders'] != null
+          ? utils.cloneArray(opts['extraHeaders'])
+          : <dynamic>[];
+      EventManager eventHandlers = opts['eventHandlers'] ?? EventManager();
+      Map<String, dynamic>? rtcOfferConstraints =
+          opts['rtcOfferConstraints'] ?? _rtcOfferConstraints;
 
-      // If it is a 2XX retransmission exit now.
-      if (succeeded) {
-        return;
+      bool succeeded = false;
+
+      extraHeaders.add('Contact: $_contact');
+      extraHeaders.add('Content-Type: application/sdp');
+
+      // Session Timers.
+      if (_sessionTimers.running) {
+        extraHeaders.add(
+            'Session-Expires: ${_sessionTimers.currentExpires};refresher=${_sessionTimers.refresher ? 'uac' : 'uas'}');
       }
 
-      // Handle Session Timers.
-      _handleSessionTimersInIncomingResponse(response);
-
-      // Must have SDP answer.
-      if (response!.body == null || response.body!.isEmpty) {
-        onFailed();
-        return;
-      } else if (response.getHeader('Content-Type') != 'application/sdp') {
-        onFailed();
-        return;
+      void onFailed([dynamic response]) {
+        if (_status != C.STATUS_TERMINATED) {
+          eventHandlers.emit(EventCallFailed(session: this, response: response));
+        }
+        markInviteTransactionDone();
       }
 
-      logger.d('emit "sdp"');
-      emit(EventSdp(originator: 'remote', type: 'answer', sdp: response.body));
+      void onSucceeded(IncomingResponse? response) async {
+        if (_status == C.STATUS_TERMINATED) {
+          markInviteTransactionDone();
+          return;
+        }
 
-      RTCSessionDescription answer =
-          RTCSessionDescription(response.body, 'answer');
+        sendRequest(SipMethod.ACK);
+
+        // If it is a 2XX retransmission exit now.
+        if (succeeded) {
+          markInviteTransactionDone();
+          return;
+        }
+
+        // Handle Session Timers.
+        _handleSessionTimersInIncomingResponse(response);
+
+        // Must have SDP answer.
+        if (response!.body == null || response.body!.isEmpty) {
+          onFailed();
+          return;
+        } else if (response.getHeader('Content-Type') != 'application/sdp') {
+          onFailed();
+          return;
+        }
+
+        logger.d('emit "sdp"');
+        emit(EventSdp(originator: 'remote', type: 'answer', sdp: response.body));
+
+        RTCSessionDescription answer =
+            RTCSessionDescription(response.body, 'answer');
+
+        try {
+          await _connection!.setRemoteDescription(answer);
+          eventHandlers.emit(EventSucceeded(response: response));
+        } catch (error) {
+          onFailed();
+          logger.e(
+              'emit "peerconnection:setremotedescriptionfailed" [error:${error.toString()}]');
+          emit(EventSetRemoteDescriptionFailed(exception: error));
+          return;
+        }
+        markInviteTransactionDone();
+      }
 
       try {
-        await _connection!.setRemoteDescription(answer);
-        eventHandlers.emit(EventSucceeded(response: response));
-      } catch (error) {
+        RTCSessionDescription desc =
+            await _createLocalDescription('offer', rtcOfferConstraints);
+        String? sdp = _mangleOffer(desc.sdp);
+
+        final int icePollMaxMs = (opts['reinviteIcePollMaxMs'] is int)
+            ? opts['reinviteIcePollMaxMs'] as int
+            : 0;
+        if (icePollMaxMs > 0 && _isReinviteOfferSdpIcePoison(sdp)) {
+          logger.d(
+              'sendReinvite() | ICE poison after createOffer, polling local SDP up to ${icePollMaxMs}ms');
+          final String? polled = await _pollMangledOfferUntilIceNotPoison(
+              Duration(milliseconds: icePollMaxMs));
+          if (polled != null) {
+            sdp = polled;
+          }
+        }
+
+        final int icePoisonMaxRetries =
+            (opts['icePoisonReinviteMaxRetries'] is int)
+                ? opts['icePoisonReinviteMaxRetries'] as int
+                : 0;
+        int poisonAttempt = 0;
+        while (_isReinviteOfferSdpIcePoison(sdp)) {
+          if (poisonAttempt >= icePoisonMaxRetries) {
+            break;
+          }
+          poisonAttempt++;
+          logger.d(
+              'sendReinvite() | ICE not ready in offer, retry $poisonAttempt/$icePoisonMaxRetries after short delay');
+          await Future<void>.delayed(
+              Duration(milliseconds: 60 + 40 * poisonAttempt));
+          if (_status == C.STATUS_TERMINATED || _connection == null) {
+            markInviteTransactionDone();
+            return;
+          }
+          desc =
+              await _createLocalDescription('offer', rtcOfferConstraints);
+          sdp = _mangleOffer(desc.sdp);
+        }
+
+        final bool bypassViability =
+            opts['bypassReinviteSdpViability'] == true;
+        if (_isReinviteOfferSdpIcePoison(sdp)) {
+          logger.w(
+              'sendReinvite() | offer SDP ICE not ready after $icePoisonMaxRetries retries; skip re-INVITE');
+          markInviteTransactionDone();
+        } else if (!bypassViability && !_isReinviteOfferSdpViable(sdp)) {
+          logger.w(
+              'sendReinvite() | offer SDP not viable (no usable audio port/ICE); skip sending re-INVITE');
+          markInviteTransactionDone();
+        } else {
+          logger.d('emit "sdp"');
+          emit(EventSdp(originator: 'local', type: 'offer', sdp: sdp));
+
+          EventManager handlers = EventManager();
+          handlers.on(EventOnSuccessResponse(), (EventOnSuccessResponse event) {
+            onSucceeded(event.response as IncomingResponse?);
+            succeeded = true;
+          });
+          handlers.on(EventOnErrorResponse(), (EventOnErrorResponse event) {
+            onFailed(event.response);
+          });
+          handlers.on(EventOnTransportError(), (EventOnTransportError event) {
+            onTransportError(); // Do nothing because session ends.
+            markInviteTransactionDone();
+          });
+          handlers.on(EventOnRequestTimeout(), (EventOnRequestTimeout event) {
+            logger.w(
+                're-INVITE timed out (Timer B); leaving dialog up (media may be stale)');
+            markInviteTransactionDone();
+          });
+          handlers.on(EventOnDialogError(), (EventOnDialogError event) {
+            onDialogError(event.response);
+            markInviteTransactionDone();
+          });
+
+          sendRequest(SipMethod.INVITE, <String, dynamic>{
+            'extraHeaders': extraHeaders,
+            'body': sdp,
+            'eventHandlers': handlers
+          });
+        }
+      } catch (e, s) {
+        logger.e(e.toString(), error: e, stackTrace: s);
         onFailed();
-        logger.e(
-            'emit "peerconnection:setremotedescriptionfailed" [error:${error.toString()}]');
-        emit(EventSetRemoteDescriptionFailed(exception: error));
       }
-    }
-
-    try {
-      RTCSessionDescription desc =
-          await _createLocalDescription('offer', rtcOfferConstraints);
-      String? sdp = _mangleOffer(desc.sdp);
-      logger.d('emit "sdp"');
-      emit(EventSdp(originator: 'local', type: 'offer', sdp: sdp));
-
-      EventManager handlers = EventManager();
-      handlers.on(EventOnSuccessResponse(), (EventOnSuccessResponse event) {
-        onSucceeded(event.response as IncomingResponse?);
-        succeeded = true;
-      });
-      handlers.on(EventOnErrorResponse(), (EventOnErrorResponse event) {
-        onFailed(event.response);
-      });
-      handlers.on(EventOnTransportError(), (EventOnTransportError event) {
-        onTransportError(); // Do nothing because session ends.
-      });
-      handlers.on(EventOnRequestTimeout(), (EventOnRequestTimeout event) {
-        onRequestTimeout(); // Do nothing because session ends.
-      });
-      handlers.on(EventOnDialogError(), (EventOnDialogError event) {
-        onDialogError(); // Do nothing because session ends.
-      });
-
-      sendRequest(SipMethod.INVITE, <String, dynamic>{
-        'extraHeaders': extraHeaders,
-        'body': sdp,
-        'eventHandlers': handlers
-      });
-    } catch (e, s) {
-      logger.e(e.toString(), error: e, stackTrace: s);
-      onFailed();
-    }
+      await inviteTransactionDone.future;
+    });
   }
 
   /**
@@ -2868,10 +3071,11 @@ class RTCSession extends EventManager implements Owner {
         onTransportError(); // Do nothing because session ends.
       });
       handlers.on(EventOnRequestTimeout(), (EventOnRequestTimeout event) {
-        onRequestTimeout(); // Do nothing because session ends.
+        logger.w(
+            'video upgrade re-INVITE timed out (Timer B); leaving dialog up');
       });
       handlers.on(EventOnDialogError(), (EventOnDialogError event) {
-        onDialogError(); // Do nothing because session ends.
+        onDialogError(event.response);
       });
 
       sendRequest(SipMethod.INVITE, <String, dynamic>{
@@ -2983,10 +3187,11 @@ class RTCSession extends EventManager implements Owner {
           onTransportError(); // Do nothing because session ends.
         });
         handlers.on(EventOnRequestTimeout(), (EventOnRequestTimeout event) {
-          onRequestTimeout(); // Do nothing because session ends.
+          logger.w(
+              'UPDATE (SDP) timed out (Timer B); leaving dialog up (media may be stale)');
         });
         handlers.on(EventOnDialogError(), (EventOnDialogError event) {
-          onDialogError(); // Do nothing because session ends.
+          onDialogError(event.response);
         });
 
         sendRequest(SipMethod.UPDATE, <String, dynamic>{
@@ -3011,10 +3216,10 @@ class RTCSession extends EventManager implements Owner {
         onTransportError(); // Do nothing because session ends.
       });
       handlers.on(EventOnRequestTimeout(), (EventOnRequestTimeout event) {
-        onRequestTimeout(); // Do nothing because session ends.
+        logger.w('UPDATE timed out (Timer B); leaving dialog up');
       });
       handlers.on(EventOnDialogError(), (EventOnDialogError event) {
-        onDialogError(); // Do nothing because session ends.
+        onDialogError(event.response);
       });
 
       sendRequest(SipMethod.UPDATE, <String, dynamic>{
@@ -3105,6 +3310,99 @@ class RTCSession extends EventManager implements Owner {
     return sdp_transform.write(sdp, null);
   }
 
+  /// True when SDP matches a WebRTC "ICE not gathered yet" template: no
+  /// `a=candidate:` and audio is unusable (discard port 9, `0.0.0.0`).
+  /// Never send even if [bypassReinviteSdpViability] is set.
+  bool _isReinviteOfferSdpIcePoison(String? sdp) {
+    if (sdp == null || sdp.trim().isEmpty || !sdp.contains('m=audio')) {
+      return false;
+    }
+    if (sdp.contains('a=candidate:')) {
+      return false;
+    }
+    try {
+      final Map<String, dynamic> parsed = sdp_transform.parse(sdp);
+      final dynamic sessConn = parsed['connection'];
+      final String? sessionIp =
+          sessConn is Map<String, dynamic> ? sessConn['ip'] as String? : null;
+      for (final dynamic raw
+          in (parsed['media'] as List<dynamic>? ?? <dynamic>[])) {
+        if (raw is! Map<String, dynamic>) {
+          continue;
+        }
+        final Map<String, dynamic> m = raw;
+        if (m['type'] != 'audio') {
+          continue;
+        }
+        final int port = m['port'] is int
+            ? m['port'] as int
+            : int.tryParse('${m['port']}') ?? 0;
+        final dynamic mConn = m['connection'];
+        final String? mediaIp =
+            mConn is Map<String, dynamic> ? mConn['ip'] as String? : null;
+        final String? ip = mediaIp ?? sessionIp;
+        if (port <= 0 || port == 9) {
+          return true;
+        }
+        if (ip == '0.0.0.0' || ip == '0:0:0:0:0:0:0:0') {
+          return true;
+        }
+        return false;
+      }
+    } catch (_) {
+      return false;
+    }
+    return false;
+  }
+
+  /// `m=audio 9`, `c=IN IP4 0.0.0.0` and no candidates. Sending those poisons the
+  /// dialog (no usable media, PBX may stop answering on the same TCP association).
+  bool _isReinviteOfferSdpViable(String? sdp) {
+    if (sdp == null || sdp.trim().isEmpty) {
+      return false;
+    }
+    if (!sdp.contains('m=audio')) {
+      return false;
+    }
+    final bool hasCandidate = sdp.contains('a=candidate:');
+    try {
+      final Map<String, dynamic> parsed = sdp_transform.parse(sdp);
+      final dynamic sessConn = parsed['connection'];
+      final String? sessionIp =
+          sessConn is Map<String, dynamic> ? sessConn['ip'] as String? : null;
+      for (final dynamic raw
+          in (parsed['media'] as List<dynamic>? ?? <dynamic>[])) {
+        if (raw is! Map<String, dynamic>) {
+          continue;
+        }
+        final Map<String, dynamic> m = raw;
+        if (m['type'] != 'audio') {
+          continue;
+        }
+        final int port = m['port'] is int
+            ? m['port'] as int
+            : int.tryParse('${m['port']}') ?? 0;
+        final dynamic mConn = m['connection'];
+        final String? mediaIp =
+            mConn is Map<String, dynamic> ? mConn['ip'] as String? : null;
+        final String? ip = mediaIp ?? sessionIp;
+        if (port <= 0) {
+          return false;
+        }
+        if (port == 9 && !hasCandidate) {
+          return false;
+        }
+        if ((ip == '0.0.0.0' || ip == '0:0:0:0:0:0:0:0') && !hasCandidate) {
+          return false;
+        }
+        return true;
+      }
+    } catch (_) {
+      return false;
+    }
+    return false;
+  }
+
   /// SDP offers may contain text media channels. e.g. Older clients using linphone.
   ///
   /// WebRTC does not support text media channels, so remove them.
@@ -3125,6 +3423,116 @@ class RTCSession extends EventManager implements Owner {
     sdp['media'] = mediaList;
 
     return sdp_transform.write(sdp, null);
+  }
+
+  /// FreeSWITCH (and other PBXs) often send legacy `RTP/AVP` without DTLS; WebRTC
+  /// [setRemoteDescription] requires `UDP/TLS/RTP/SAVPF` and [a=fingerprint].
+  /// Build a compatible offer using ICE/fingerprint lines from [createOffer] on
+  /// the same [RTCPeerConnection] (after addTrack).
+  Future<String?> _sdpOfferToWebRtcAsync(String? sdpInput) async {
+    if (sdpInput == null) {
+      return null;
+    }
+    final String trimmed = sdpInput.trim();
+    final String lower = trimmed.toLowerCase();
+    if (lower.contains('a=fingerprint:') &&
+        lower.contains('udp/tls/rtp/savpf')) {
+      return _sdpOfferToWebRTC(sdpInput);
+    }
+    if (_connection == null) {
+      return _sdpOfferToWebRTC(sdpInput);
+    }
+    try {
+      final RTCSessionDescription template =
+          await _connection!.createOffer(<String, dynamic>{});
+      final String? templateSdp = template.sdp;
+      if (templateSdp == null || templateSdp.trim().isEmpty) {
+        return _sdpOfferToWebRTC(sdpInput);
+      }
+      final String merged =
+          _injectWebRtcSecurityIntoLegacyRtpOffer(sdpInput, templateSdp);
+      logger.d(
+          'SDP: interop — injected WebRTC DTLS/ICE into legacy RTP/AVP offer');
+      // Only the initial incoming [answer] runs at STATUS_ANSWERED; in-dialog
+      // re-INVITEs use STATUS_CONFIRMED and must not trigger this.
+      if (_direction == 'incoming' && _status == C.STATUS_ANSWERED) {
+        _needsPostAckMediaRenegotiation = true;
+      }
+      return _sdpOfferToWebRTC(merged);
+    } catch (e, stackTrace) {
+      logger.w('SDP: legacy→WebRTC merge failed ($e)\n$stackTrace');
+      return _sdpOfferToWebRTC(sdpInput);
+    }
+  }
+
+  /// ICE/DTLS lines from the first `m=audio` block of [localOfferSdp] only
+  /// (avoids candidates / attributes from a second m= section, e.g. mid=1).
+  List<String> _extractFirstAudioWebRtcShim(String localOfferSdp) {
+    final List<String> lines =
+        localOfferSdp.replaceAll('\r\n', '\n').split('\n');
+    final List<String> out = <String>[];
+    bool inFirstAudio = false;
+    for (final String raw in lines) {
+      final String t = raw.trim();
+      if (t.startsWith('m=')) {
+        if (inFirstAudio) {
+          break;
+        }
+        if (t.startsWith('m=audio')) {
+          inFirstAudio = true;
+        }
+        continue;
+      }
+      if (!inFirstAudio) {
+        continue;
+      }
+      if (t.startsWith('a=ice-ufrag:') ||
+          t.startsWith('a=ice-pwd:') ||
+          t.startsWith('a=fingerprint:') ||
+          t.startsWith('a=setup:') ||
+          t.startsWith('a=candidate:') ||
+          t.startsWith('a=ice-options:')) {
+        out.add(t);
+      }
+    }
+    return out;
+  }
+
+  /// FS often puts `c=` at **session** level; legacy RTP/AVP has no `c=` under
+  /// `m=audio`. Inject `a=mid`, `a=rtcp-mux`, and shim immediately after the
+  /// first `m=audio` line so WebRTC does not synthesize a broken mid=1 section.
+  String _injectWebRtcSecurityIntoLegacyRtpOffer(
+    String remoteSdp,
+    String localOfferSdp,
+  ) {
+    final String rem = remoteSdp.replaceAll('\r\n', '\n');
+    final List<String> shim = _extractFirstAudioWebRtcShim(localOfferSdp);
+
+    final List<String> out = <String>[];
+    bool injectedFirstAudio = false;
+
+    for (String line in rem.split('\n')) {
+      final String trimmed = line.trim();
+      if (trimmed.isEmpty) {
+        out.add('');
+        continue;
+      }
+      if (trimmed.startsWith('m=audio') && !injectedFirstAudio) {
+        out.add(trimmed.replaceFirst(' RTP/AVP ', ' UDP/TLS/RTP/SAVPF '));
+        out.add('a=mid:0');
+        out.add('a=rtcp-mux');
+        out.addAll(shim);
+        injectedFirstAudio = true;
+        continue;
+      }
+      out.add(trimmed);
+    }
+
+    if (!injectedFirstAudio && shim.isNotEmpty) {
+      logger.w('SDP inject: no m=audio in remote offer');
+    }
+
+    return out.join('\r\n');
   }
 
   void _setLocalMediaStatus() {
@@ -3296,6 +3704,30 @@ class RTCSession extends EventManager implements Owner {
     _is_confirmed = true;
     logger.d('emit "confirmed"');
     emit(EventCallConfirmed(session: this, originator: originator, ack: ack));
+
+    if (_needsPostAckMediaRenegotiation) {
+      _needsPostAckMediaRenegotiation = false;
+      if (_ua.activeSessionCount > 1) {
+        logger.d(
+            'SDP: skip post-ACK re-INVITE while multiple sessions active (transfer / second line)');
+      } else {
+        logger.d(
+            'SDP: post-ACK re-INVITE after legacy-offer WebRTC shim (sync media with peer)');
+        scheduleMicrotask(() {
+          if (_status == C.STATUS_TERMINATED || _connection == null) {
+            return;
+          }
+          if (_ua.activeSessionCount > 1) {
+            return;
+          }
+          try {
+            _sendReinvite();
+          } catch (e, s) {
+            logger.w('post-ACK re-INVITE failed: $e\n$s');
+          }
+        });
+      }
+    }
   }
 
   void _ended(String originator, IncomingRequest? request, ErrorCause cause) {

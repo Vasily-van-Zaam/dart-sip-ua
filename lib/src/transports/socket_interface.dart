@@ -5,6 +5,9 @@ abstract class SIPUASocketInterface {
   int? get weight;
   set via_transport(String value);
 
+  /// TCP only: local `host:port` / `[ipv6]:port` after connect. WebSocket: null.
+  String? get localSignalingEndpoint => null;
+
   void Function()? onconnect;
   void Function(SIPUASocketInterface socket, bool error, int? closeCode,
       String? reason)? ondisconnect;

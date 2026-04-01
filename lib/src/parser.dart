@@ -1,4 +1,5 @@
 import 'dart:convert' show utf8;
+import 'dart:math' show min;
 
 import 'grammar.dart';
 import 'logger.dart';
@@ -88,13 +89,16 @@ IncomingMessage? parseMessage(String data, UA? ua) {
     headerContentLength ??= 0;
 
     if (headerContentLength > 0) {
-      List<int> actualContent = utf8.encode(data.substring(bodyStart));
-      if (headerContentLength != actualContent.length)
+      // RFC 3261 §18.3: body is exactly Content-Length octets; discard any tail
+      // (e.g. another SIP message glued in the same TCP chunk).
+      final List<int> encodedBody = utf8.encode(data.substring(bodyStart));
+      final int take = min(headerContentLength, encodedBody.length);
+      if (headerContentLength != encodedBody.length) {
         logger.w(
-            '${message.method} received with content-length: $headerContentLength but actual length is: ${actualContent.length}');
-      List<int> encodedBody = utf8.encode(data.substring(bodyStart));
-      List<int> content = encodedBody.sublist(0, actualContent.length);
-      message.body = utf8.decode(content);
+            '${message.method} received with content-length: $headerContentLength but actual length is: ${encodedBody.length}');
+      }
+      message.body = utf8.decode(encodedBody.sublist(0, take),
+          allowMalformed: true);
     }
   } else {
     message.body = data.substring(bodyStart);

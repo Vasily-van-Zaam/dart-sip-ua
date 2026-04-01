@@ -8,7 +8,7 @@ import 'stack_trace_nj.dart';
 Logger logger = Log();
 
 class Log extends Logger {
-  Log() : super(printer: MyLogPrinter('.')) {
+  Log() : super(level: Level.trace, printer: MyLogPrinter('.')) {
     StackTraceNJ frames = StackTraceNJ();
 
     if (frames.frames != null) {
@@ -21,7 +21,9 @@ class Log extends Logger {
   }
 
   static late String _localPath;
+  static bool _loggingEnabled = true;
   static Level _loggingLevel = Level.debug;
+  static set loggingEnabled(bool enabled) => _loggingEnabled = enabled;
   static set loggingLevel(Level loggingLevel) => _loggingLevel = loggingLevel;
 }
 
@@ -42,6 +44,9 @@ class MyLogPrinter extends LogPrinter {
 
   @override
   List<String> log(LogEvent event) {
+    if (!Log._loggingEnabled) {
+      return <String>[];
+    }
     if (EnumHelper.getIndexOf(Level.values, Log._loggingLevel) >
         EnumHelper.getIndexOf(Level.values, event.level)) {
       // don't log events where the log level is set higher

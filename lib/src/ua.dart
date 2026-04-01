@@ -32,6 +32,24 @@ import 'transports/web_socket.dart';
 import 'uri.dart';
 import 'utils.dart' as Utils;
 
+/// Parse TCP local bind `[ipv6]:port` or `ipv4:port`.
+MapEntry<String, int>? _parseLocalSignalingEndpoint(String ep) {
+  if (ep.startsWith('[')) {
+    final int close = ep.indexOf(']:');
+    if (close < 0) return null;
+    final String host = ep.substring(1, close);
+    final int? p = int.tryParse(ep.substring(close + 2));
+    if (p == null) return null;
+    return MapEntry<String, int>(host, p);
+  }
+  final int last = ep.lastIndexOf(':');
+  if (last <= 0) return null;
+  final String host = ep.substring(0, last);
+  final int? p = int.tryParse(ep.substring(last + 1));
+  if (p == null || host.isEmpty) return null;
+  return MapEntry<String, int>(host, p);
+}
+
 class C {
   // UA status codes.
   static const int STATUS_INIT = 0;
@@ -137,6 +155,10 @@ class UA extends EventManager {
   SocketTransport? get socketTransport => _socketTransport;
 
   TransactionBag get transactions => _transactions;
+
+  /// Count of sessions that are not fully ended (includes early + confirmed dialogs).
+  int get activeSessionCount =>
+      _sessions.values.where((RTCSession s) => !s.isEnded()).length;
 
   // Flag that indicates whether UA is currently stopping
   bool _stopping = false;
@@ -905,8 +927,28 @@ class UA extends EventManager {
     }
 
     // Via Host.
+    //
+    // If `contact_uri` is explicitly set to the same host as the AOR / registrar
+    // (typical: `sip:user@pbx.example.com`), copying that host into Via breaks
+    // client-initiated TCP/TLS flows: Via would name the PBX, not this endpoint.
+    // Keep the default `...invalid` via_host so the server can stamp
+    // `received` / `rport` and correlate inbound signaling with this connection.
     if (_configuration.contact_uri != null) {
-      _configuration.via_host = _configuration.contact_uri.host;
+      final dynamic cu = _configuration.contact_uri;
+      if (cu is URI) {
+        final String contactHost = cu.host;
+        final String aorHost = _configuration.uri.host;
+        final dynamic reg = _configuration.registrar_server;
+        String? regHost;
+        if (reg is URI) {
+          regHost = reg.host;
+        }
+        final bool contactIsRegistrarDomain = contactHost == aorHost ||
+            (regHost != null && contactHost == regHost);
+        if (!contactIsRegistrarDomain) {
+          _configuration.via_host = contactHost;
+        }
+      }
     }
     // Contact URI.
     else {
@@ -950,6 +992,24 @@ class UA extends EventManager {
     emit(EventSocketConnected(socket: transport.socket));
     _lastTransportActivityAt = DateTime.now();
     _startTransportOptionsProbe();
+
+    final String? localEp = transport.socket.localSignalingEndpoint;
+    if (localEp != null && _configuration.transportType == TransportType.TCP) {
+      _configuration.via_host = localEp;
+      final MapEntry<String, int>? parsed =
+          _parseLocalSignalingEndpoint(localEp);
+      final String? user = _configuration.uri.user;
+      if (parsed != null && user != null) {
+        _configuration.contact_uri = URI(
+          'sip',
+          user,
+          parsed.key,
+          parsed.value,
+          <dynamic, dynamic>{'transport': 'tcp'},
+        );
+        _contact = Contact(_configuration.contact_uri);
+      }
+    }
 
     if (_dynConfiguration!.register!) {
       _registrator.register();

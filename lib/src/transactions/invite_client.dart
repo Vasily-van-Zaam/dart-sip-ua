@@ -144,6 +144,7 @@ class InviteClientTransaction extends TransactionBase {
     if (status_code >= 100 && status_code <= 199) {
       switch (state) {
         case TransactionState.CALLING:
+          clearTimeout(B);
           stateChanged(TransactionState.PROCEEDING);
           _eventHandlers.emit(
               EventOnReceiveResponse(response: response as IncomingResponse?));
@@ -159,6 +160,7 @@ class InviteClientTransaction extends TransactionBase {
       switch (state) {
         case TransactionState.CALLING:
         case TransactionState.PROCEEDING:
+          clearTimeout(B);
           stateChanged(TransactionState.ACCEPTED);
           M = setTimeout(() {
             timer_M();
@@ -177,6 +179,7 @@ class InviteClientTransaction extends TransactionBase {
       switch (state) {
         case TransactionState.CALLING:
         case TransactionState.PROCEEDING:
+          clearTimeout(B);
           stateChanged(TransactionState.COMPLETED);
           sendACK(response);
           _eventHandlers.emit(

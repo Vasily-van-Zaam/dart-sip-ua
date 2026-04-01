@@ -25,8 +25,6 @@ class UnHandledResponse {
 
 class Registrator {
   Registrator(UA ua, [SocketTransport? transport]) {
-    int reg_id = 1; // Force reg_id to 1.
-
     _ua = ua;
     _transport = transport;
 
@@ -47,29 +45,13 @@ class Registrator {
     // Set status.
     _registered = false;
 
-    // Contact header.
-    _contact = _ua.contact.toString();
-
-    // Sip.ice media feature tag (RFC 5768), optional (see Settings.sip_advertise_ice).
-    if (_ua.configuration.sip_advertise_ice) {
-      _contact += ';+sip.ice';
-    }
-
     // Custom headers for REGISTER and un-REGISTER.
     _extraHeaders = ua.configuration.register_extra_headers;
 
     // Custom Contact header params for REGISTER and un-REGISTER.
     _extraContactParams = '';
 
-    // Custom Contact URI params for REGISTER and un-REGISTER.
-    setExtraContactUriParams(
-        ua.configuration.register_extra_contact_uri_params);
-
-    if (reg_id != null) {
-      _contact += ';reg-id=$reg_id';
-      _contact +=
-          ';+sip.instance="<urn:uuid:${_ua.configuration.instance_id}>"';
-    }
+    _refreshRegisterStateFromUa();
   }
 
   late UA _ua;
@@ -127,6 +109,8 @@ class Registrator {
       logger.d('Register request in progress...');
       return;
     }
+
+    _refreshRegisterStateFromUa();
 
     List<String> extraHeaders = List<String>.from(_extraHeaders ?? <String>[]);
 
@@ -283,6 +267,8 @@ class Registrator {
       return;
     }
 
+    _refreshRegisterStateFromUa();
+
     _registered = false;
 
     // Clear the registration timer.
@@ -359,6 +345,25 @@ class Registrator {
       _registered = false;
       _ua.unregistered();
     }
+  }
+
+  /// Rebuild Contact / registrar from current [UA] (needed after TCP bind
+  /// updates local IP:port for Via and Contact).
+  void _refreshRegisterStateFromUa() {
+    if (_ua.configuration.registrar_server != null) {
+      _registrar = _ua.configuration.registrar_server as URI;
+    }
+    _to_uri = _ua.configuration.uri;
+
+    _contact = _ua.contact.toString();
+    if (_ua.configuration.sip_advertise_ice) {
+      _contact += ';+sip.ice';
+    }
+    setExtraContactUriParams(
+        _ua.configuration.register_extra_contact_uri_params);
+    _contact += ';reg-id=1';
+    _contact +=
+        ';+sip.instance="<urn:uuid:${_ua.configuration.instance_id}>"';
   }
 
   void _registrationFailure(dynamic response, String cause) {

@@ -1,7 +1,46 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:sip_ua/sip_ua.dart';
 import 'package:sip_ua/src/transports/socket_interface.dart';
 import 'package:sip_ua/src/transports/tcp_socket_impl.dart';
 import '../logger.dart';
+
+/// Upper bound for a single assembled SIP-over-TCP message (headers + body), in **octets**.
+/// Stops unbounded RAM use if headers never complete or Content-Length is bogus.
+/// Typical SIP+SDP is well below 64 KiB; 512 KiB is a generous safety margin.
+const int _maxSipTcpAssembledMessageBytes = 512 * 1024;
+
+int? _contentLengthFromHeaderSection(String headerSection) {
+  int? last;
+  for (final String line in headerSection.split('\r\n')) {
+    // RFC 3261 §7.3.3: compact form of Content-Length is `l`.
+    // If we treat SDP responses as CL:0, the TCP byte stream desyncs and
+    // every following request/response looks "dead" (typical after transfer bursts).
+    final RegExpMatch? m = RegExp(
+      r'^\s*(?:Content-Length|l)\s*:\s*(\d+)\s*$',
+      caseSensitive: false,
+    ).firstMatch(line);
+    if (m != null) {
+      last = int.tryParse(m.group(1)!);
+    }
+  }
+  return last;
+}
+
+/// Returns index of `\r\n\r\n` in [buf], or -1.
+int _indexOfDoubleCrlf(List<int> buf) {
+  final int n = buf.length;
+  for (int i = 0; i + 3 < n; i++) {
+    if (buf[i] == 0x0d &&
+        buf[i + 1] == 0x0a &&
+        buf[i + 2] == 0x0d &&
+        buf[i + 3] == 0x0a) {
+      return i;
+    }
+  }
+  return -1;
+}
 
 class SIPUATcpSocket extends SIPUASocketInterface {
   SIPUATcpSocket(String host, String port,
@@ -37,6 +76,11 @@ class SIPUATcpSocket extends SIPUASocketInterface {
   int? status;
   late TcpSocketSettings _tcpSocketSettings;
 
+  /// SIP over TCP: one logical message can span multiple [Socket] reads. Buffer
+  /// until headers + Content-Length **octets** are complete (RFC 3261 §18.3).
+  /// Uses a byte buffer so [Content-Length] matches wire octets (UTF-8 bodies).
+  final List<int> _inboundBuffer = <int>[];
+
   @override
   String get via_transport => _via_transport;
 
@@ -54,6 +98,12 @@ class SIPUATcpSocket extends SIPUASocketInterface {
   String? get host => _host;
 
   String? get port => _port;
+
+  @override
+  String? get localSignalingEndpoint {
+    if (!_connected || _tcpSocketImpl == null) return null;
+    return _tcpSocketImpl!.localEndpointString;
+  }
 
   @override
   void connect() async {
@@ -87,6 +137,7 @@ class SIPUATcpSocket extends SIPUASocketInterface {
         _closed = false;
         _connected = true;
         _connecting = false;
+        _inboundBuffer.clear();
         logger.d('Tcp Socket is now connected?');
         _onOpen();
       };
@@ -122,13 +173,16 @@ class SIPUATcpSocket extends SIPUASocketInterface {
     _closed = true;
     _connected = false;
     _connecting = false;
+    _inboundBuffer.clear();
     _onClose(true, 0, 'Client send disconnect');
     try {
       if (_tcpSocketImpl != null) {
         _tcpSocketImpl!.close();
+        _tcpSocketImpl = null;
       }
     } catch (error) {
       logger.e('close() | error closing the TcpSocket: $error');
+      _tcpSocketImpl = null;
     }
   }
 
@@ -170,13 +224,74 @@ class SIPUATcpSocket extends SIPUASocketInterface {
     ondisconnect!(this, !wasClean, code, reason);
   }
 
+  Uint8List _chunkToBytes(dynamic data) {
+    if (data is Uint8List) {
+      return data;
+    }
+    if (data is List<int>) {
+      return Uint8List.fromList(data);
+    }
+    if (data is String) {
+      return Uint8List.fromList(utf8.encode(data));
+    }
+    return Uint8List.fromList(utf8.encode(data.toString()));
+  }
+
   void _onMessage(dynamic data) {
     logger.d('Received TcpSocket data');
-    if (data != null) {
-      if (data.toString().trim().length > 0) {
-        ondata!(data);
-      } else {
-        logger.d('Received and ignored empty packet');
+    if (data == null) {
+      return;
+    }
+    final Uint8List chunk = _chunkToBytes(data);
+    if (chunk.isEmpty) {
+      logger.d('Received and ignored empty packet');
+      return;
+    }
+    _inboundBuffer.addAll(chunk);
+    if (_inboundBuffer.length > _maxSipTcpAssembledMessageBytes) {
+      logger.w(
+          'SIP TCP inbound assembly buffer exceeded '
+          '$_maxSipTcpAssembledMessageBytes bytes; resetting (stream may need reconnect)');
+      _inboundBuffer.clear();
+      return;
+    }
+
+    while (true) {
+      if (_inboundBuffer.length >= 2 &&
+          _inboundBuffer[0] == 0x0d &&
+          _inboundBuffer[1] == 0x0a) {
+        _inboundBuffer.removeRange(0, 2);
+        continue;
+      }
+      if (_inboundBuffer.isEmpty) {
+        break;
+      }
+
+      final int headerEnd = _indexOfDoubleCrlf(_inboundBuffer);
+      if (headerEnd < 0) {
+        break;
+      }
+
+      final String headerPart =
+          utf8.decode(_inboundBuffer.sublist(0, headerEnd), allowMalformed: true);
+      final int bodyLen = _contentLengthFromHeaderSection(headerPart) ?? 0;
+      if (bodyLen > _maxSipTcpAssembledMessageBytes) {
+        logger.w(
+            'SIP TCP Content-Length $bodyLen exceeds cap '
+            '$_maxSipTcpAssembledMessageBytes; resetting assembly buffer');
+        _inboundBuffer.clear();
+        return;
+      }
+      final int totalLen = headerEnd + 4 + bodyLen;
+      if (_inboundBuffer.length < totalLen) {
+        break;
+      }
+
+      final String message =
+          utf8.decode(_inboundBuffer.sublist(0, totalLen), allowMalformed: true);
+      _inboundBuffer.removeRange(0, totalLen);
+      if (message.trim().isNotEmpty) {
+        ondata!(message);
       }
     }
   }
