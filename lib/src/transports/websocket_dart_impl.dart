@@ -16,6 +16,7 @@ class SIPUAWebSocketImpl {
 
   final String _url;
   WebSocket? _socket;
+  StreamSubscription<dynamic>? _queueSubscription;
   OnOpenCallback? onOpen;
   OnMessageCallback? onMessage;
   OnCloseCallback? onClose;
@@ -60,13 +61,26 @@ class SIPUAWebSocketImpl {
   }
 
   final StreamController<dynamic> queue = StreamController<dynamic>.broadcast();
-  void handleQueue() async {
-    queue.stream.asyncMap((dynamic event) async {
+  void handleQueue() {
+    // IMPORTANT:
+    // reconnect() may call connect() multiple times; we must not create
+    // multiple listeners for the same queue, otherwise delayed SIP messages
+    // get sent multiple times.
+    if (_queueSubscription != null) return;
+
+    _queueSubscription = queue.stream.asyncMap((dynamic event) async {
       await Future<void>.delayed(Duration(milliseconds: messageDelay));
       return event;
     }).listen((dynamic event) async {
-      _socket!.add(event);
-      logger.d('send: \n\n$event');
+      final ws = _socket;
+      if (ws == null) return;
+      try {
+        ws.add(event);
+        logger.d('send: \n\n$event');
+      } catch (_) {
+        // Best-effort: if socket got closed between queueing and send,
+        // just drop this delayed packet.
+      }
     });
   }
 
@@ -77,7 +91,14 @@ class SIPUAWebSocketImpl {
   }
 
   void close() {
-    if (_socket != null) _socket!.close();
+    _queueSubscription?.cancel();
+    _queueSubscription = null;
+    if (_socket != null) {
+      try {
+        _socket!.close();
+      } catch (_) {}
+    }
+    _socket = null;
   }
 
   bool isConnecting() {

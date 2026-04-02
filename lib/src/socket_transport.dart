@@ -51,6 +51,7 @@ class SocketTransport {
   int _recover_attempts = 0;
   Timer? _recovery_timer;
   bool _close_requested = false;
+  bool _desyncRecoveryScheduled = false;
 
   /// Fired when automatic reconnect backoff is scheduled (not for user [disconnect]).
   void Function(int attempt, int delaySeconds)? onReconnectScheduled;
@@ -150,8 +151,35 @@ class SocketTransport {
     return socket.send(message);
   }
 
+  /// The stack historically treated [status] as the only source of truth, but the
+  /// underlying [socket] can already be closed (half-open / missed [ondisconnect]
+  /// races). That leaves [status]==CONNECTED while no SIP traffic can flow — UI
+  /// may still show "registered" and the OPTIONS idle probe keeps trying until it
+  /// times out. Keep transport state aligned with [SIPUASocketInterface.isConnected].
   bool isConnected() {
-    return status == C.STATUS_CONNECTED;
+    if (status != C.STATUS_CONNECTED) {
+      return false;
+    }
+    if (!socket.isConnected()) {
+      _scheduleDesyncRecovery();
+      return false;
+    }
+    return true;
+  }
+
+  void _scheduleDesyncRecovery() {
+    if (_desyncRecoveryScheduled) {
+      return;
+    }
+    _desyncRecoveryScheduled = true;
+    scheduleMicrotask(() {
+      _desyncRecoveryScheduled = false;
+      if (status == C.STATUS_CONNECTED && !socket.isConnected()) {
+        logger.w(
+            'SocketTransport: status was CONNECTED but socket reports disconnected; closing with recovery');
+        disconnectWithRecovery();
+      }
+    });
   }
 
   bool isConnecting() {

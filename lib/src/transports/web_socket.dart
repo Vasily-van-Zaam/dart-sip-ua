@@ -81,33 +81,48 @@ class SIPUAWebSocket extends SIPUASocketInterface {
       logger.d('WebSocket $_url is connecting');
       return;
     }
-    if (_ws != null) {
-      disconnect();
-    }
+    // Do NOT call [disconnect] here: it emits [ondisconnect] and makes
+    // [SocketTransport._onDisconnect] schedule a second reconnect timer while this
+    // same [connect] is already running (CONNECTING). That produces back-to-back
+    // recoveries and bogus rapid DISCONNECTED events. Only replace the impl.
+    _silentDisposeSocketImpl();
     logger.d('connecting to WebSocket $_url');
     try {
       _disconnectEmitted = false;
-      _ws = SIPUAWebSocketImpl(_url!, _messageDelay);
+      final SIPUAWebSocketImpl impl =
+          SIPUAWebSocketImpl(_url!, _messageDelay);
+      _ws = impl;
 
-      _ws!.onOpen = () {
+      impl.onOpen = () {
+        if (!identical(impl, _ws)) {
+          return;
+        }
         _closed = false;
         _connected = true;
         logger.d('Web Socket is now connected');
         _onOpen();
       };
 
-      _ws!.onMessage = (dynamic data) {
+      impl.onMessage = (dynamic data) {
+        if (!identical(impl, _ws)) {
+          return;
+        }
         _onMessage(data);
       };
 
-      _ws!.onClose = (int? closeCode, String? closeReason,
+      impl.onClose = (int? closeCode, String? closeReason,
           {required bool wasClean}) {
+        if (!identical(impl, _ws)) {
+          logger.d(
+              'Ignore stale WebSocket close (replaced impl) [$closeCode, $closeReason]');
+          return;
+        }
         logger.d('Closed [$closeCode, $closeReason] clean=$wasClean');
         _connected = false;
         _onClose(wasClean, closeCode, closeReason);
       };
 
-      _ws!.connect(
+      impl.connect(
           protocols: <String>[_websocket_protocol],
           webSocketSettings: _webSocketSettings);
     } catch (e, s) {
@@ -115,6 +130,24 @@ class SIPUAWebSocket extends SIPUASocketInterface {
       _connected = false;
       logger.e('WebSocket $_url error: $e');
     }
+  }
+
+  /// Closes the current native socket without notifying [ondisconnect].
+  /// Used when swapping implementations during [connect]; transport already
+  /// manages recovery and must not see an extra logical disconnect per attempt.
+  void _silentDisposeSocketImpl() {
+    if (_ws == null) {
+      return;
+    }
+    logger.d('WebSocket silent dispose before new connect');
+    try {
+      _ws!.close();
+    } catch (error) {
+      logger.e('silent dispose | error: $error');
+    }
+    _ws = null;
+    _connected = false;
+    _closed = false;
   }
 
   @override

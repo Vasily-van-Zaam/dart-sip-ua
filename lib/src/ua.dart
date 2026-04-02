@@ -166,6 +166,7 @@ class UA extends EventManager {
   Timer? _transportOptionsProbeTimer;
   Timer? _transportOptionsProbeResponseTimer;
   Options? _transportOptionsProbeInFlight;
+  SIPUASocketInterface? _transportOptionsProbeSocket;
   int _transportOptionsProbeAttempt = 0;
 
   // ============
@@ -1119,7 +1120,17 @@ class UA extends EventManager {
       _transportOptionsProbeInFlight?.close();
     } catch (_) {}
     _transportOptionsProbeInFlight = null;
+    _transportOptionsProbeSocket = null;
     _transportOptionsProbeAttempt = 0;
+  }
+
+  bool _isStaleTransportOptionsProbe() {
+    final currentSocket = _socketTransport?.socket;
+    if (_transportOptionsProbeSocket == null || currentSocket == null) {
+      return false;
+    }
+    // Probe belongs to an old socket instance after reconnect.
+    return !identical(_transportOptionsProbeSocket, currentSocket);
   }
 
   void _checkTransportOptionsProbe() {
@@ -1127,6 +1138,13 @@ class UA extends EventManager {
       return;
     }
     if (_status != C.STATUS_READY) {
+      return;
+    }
+    // Never run idle/liveness OPTIONS while a call session is active: a slow STUN,
+    // main-thread jank, or temporary lack of in-dialog traffic can make the probe
+    // time out and force disconnectWithRecovery(), killing signaling mid-call.
+    if (activeSessionCount > 0) {
+      _lastTransportActivityAt = DateTime.now();
       return;
     }
     if (_socketTransport == null || !_socketTransport!.isConnected()) {
@@ -1174,6 +1192,7 @@ class UA extends EventManager {
     try {
       logger.w(
           'Transport idle detected. Sending OPTIONS probe attempt $attempt/$maxAttempts');
+      _transportOptionsProbeSocket = _socketTransport?.socket;
       _transportOptionsProbeInFlight = sendOptions(
         _transportOptionsProbeTarget(),
         'ping',
@@ -1210,18 +1229,29 @@ class UA extends EventManager {
     _transportOptionsProbeResponseTimer?.cancel();
     _transportOptionsProbeResponseTimer = null;
     _transportOptionsProbeInFlight = null;
+    _transportOptionsProbeSocket = null;
     _transportOptionsProbeAttempt = 0;
     _lastTransportActivityAt = DateTime.now();
     logger.d('OPTIONS probe succeeded');
   }
 
   void _onTransportOptionsProbeFailure() {
+    if (_isStaleTransportOptionsProbe()) {
+      logger.d('Ignore stale OPTIONS probe failure after transport switch');
+      _transportOptionsProbeResponseTimer?.cancel();
+      _transportOptionsProbeResponseTimer = null;
+      _transportOptionsProbeInFlight = null;
+      _transportOptionsProbeSocket = null;
+      _transportOptionsProbeAttempt = 0;
+      return;
+    }
     _transportOptionsProbeResponseTimer?.cancel();
     _transportOptionsProbeResponseTimer = null;
     try {
       _transportOptionsProbeInFlight?.close();
     } catch (_) {}
     _transportOptionsProbeInFlight = null;
+    _transportOptionsProbeSocket = null;
 
     final int maxAttempts = _configuration.transport_options_probe_max_attempts > 0
         ? _configuration.transport_options_probe_max_attempts
