@@ -188,6 +188,8 @@ class SIPUAHelper extends EventManager {
         uaSettings.connectionRecoveryMaxInterval;
     _settings.connection_recovery_min_interval =
         uaSettings.connectionRecoveryMinInterval;
+    _settings.post_reconnect_register_delay_ms =
+        uaSettings.postReconnectRegisterDelayMs;
     _settings.transport_options_probe_enabled =
         uaSettings.transportOptionsProbeEnabled;
     _settings.transport_options_probe_idle_sec =
@@ -935,6 +937,10 @@ class UaSettings {
 
   /// Min interval between recovery connection, default 2 sec
   int connectionRecoveryMinInterval = 2;
+
+  /// Delay REGISTER after transport reconnect (not first connect). Helps PBXs
+  /// that still assume the previous session is up for a short time.
+  int postReconnectRegisterDelayMs = 2000;
 
   bool terminateOnMediaPortZero = false;
 

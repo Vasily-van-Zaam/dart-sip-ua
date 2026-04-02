@@ -51,6 +51,12 @@ class Settings {
   int connection_recovery_max_interval = 30;
   int connection_recovery_min_interval = 2;
 
+  /// After an involuntary transport drop, wait this many milliseconds before
+  /// sending REGISTER on the new socket. Some registrars (e.g. FreeSWITCH) may
+  /// still treat the old WSS session as valid briefly; an immediate re-REGISTER
+  /// can be ignored or leave binding inconsistent. First connect is unaffected.
+  int post_reconnect_register_delay_ms = 0;
+
   /*
    * Host address.
    * Value to be set in Via sent_by and host part of Contact FQDN.
@@ -164,6 +170,12 @@ class Checks {
       if (connection_recovery_min_interval > 0) {
         dst!.connection_recovery_min_interval =
             connection_recovery_min_interval;
+      }
+    },
+    'post_reconnect_register_delay_ms': (Settings src, Settings? dst) {
+      final int value = src.post_reconnect_register_delay_ms;
+      if (value >= 0) {
+        dst!.post_reconnect_register_delay_ms = value;
       }
     },
     'contact_uri': (Settings src, Settings? dst) {

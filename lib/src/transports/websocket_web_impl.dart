@@ -89,6 +89,39 @@ class SIPUAWebSocketImpl {
     _socket?.close();
   }
 
+  /// Same contract as [dart:io] impl: wait until the browser has finished the
+  /// close handshake before opening another socket (see SIPUAWebSocket wrapper).
+  Future<void> closeAndWaitForDone({
+    Duration waitForDone = const Duration(seconds: 3),
+  }) async {
+    _connectTimeoutTimer?.cancel();
+    _connectTimeoutTimer = null;
+    final WebSocket? s = _socket;
+    _socket = null;
+    if (s == null) {
+      return;
+    }
+    final Completer<void> done = Completer<void>();
+    late final StreamSubscription<dynamic> sub;
+    sub = s.onClose.listen((dynamic _) {
+      if (!done.isCompleted) {
+        done.complete();
+      }
+    });
+    try {
+      s.close();
+    } catch (_) {}
+    try {
+      await done.future.timeout(waitForDone);
+    } on TimeoutException {
+      logger.w(
+          'WebSocket close wait timed out after ${waitForDone.inMilliseconds}ms');
+    } catch (_) {}
+    try {
+      await sub.cancel();
+    } catch (_) {}
+  }
+
   void _emitClose(int? code, String? reason, {required bool wasClean}) {
     if (_closeEmitted) {
       return;

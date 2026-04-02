@@ -168,6 +168,13 @@ class UA extends EventManager {
   Options? _transportOptionsProbeInFlight;
   SIPUASocketInterface? _transportOptionsProbeSocket;
   int _transportOptionsProbeAttempt = 0;
+  Timer? _postReconnectRegisterTimer;
+  bool _pendingPostReconnectRegister = false;
+
+  void _cancelPostReconnectRegisterTimer() {
+    _postReconnectRegisterTimer?.cancel();
+    _postReconnectRegisterTimer = null;
+  }
 
   // ============
   //  High Level API
@@ -338,6 +345,7 @@ class UA extends EventManager {
   void stop() {
     logger.d('stop()');
     _stopTransportOptionsProbe();
+    _cancelPostReconnectRegisterTimer();
 
     // Remove dynamic settings.
     _dynConfiguration = null;
@@ -1013,13 +1021,43 @@ class UA extends EventManager {
     }
 
     if (_dynConfiguration!.register!) {
-      _registrator.register();
+      // Use [register] so subclasses (e.g. OAuth headers) can hook the path.
+      _cancelPostReconnectRegisterTimer();
+      final int delayMs = _configuration.post_reconnect_register_delay_ms;
+      if (delayMs > 0 && _pendingPostReconnectRegister) {
+        _pendingPostReconnectRegister = false;
+        logger.d(
+            'register() in ${delayMs}ms after transport recovery (post_reconnect_register_delay_ms)');
+        _postReconnectRegisterTimer =
+            Timer(Duration(milliseconds: delayMs), () {
+          _postReconnectRegisterTimer = null;
+          if (_status == C.STATUS_USER_CLOSED) {
+            return;
+          }
+          if (_socketTransport != null &&
+              !_socketTransport!.isConnected()) {
+            logger.d(
+                'register() after reconnect delay skipped: transport not connected');
+            return;
+          }
+          register();
+        });
+      } else {
+        _pendingPostReconnectRegister = false;
+        register();
+      }
+    } else {
+      _pendingPostReconnectRegister = false;
     }
   }
 
 // Transport disconnected event.
   void onTransportDisconnect(SIPUASocketInterface? socket, ErrorCause cause) {
     _stopTransportOptionsProbe();
+    _cancelPostReconnectRegisterTimer();
+    if (_status != C.STATUS_USER_CLOSED) {
+      _pendingPostReconnectRegister = true;
+    }
     // Run _onTransportError_ callback on every client transaction using _transport_.
     _transactions.removeAll().forEach((TransactionBase transaction) {
       transaction.onTransportError();

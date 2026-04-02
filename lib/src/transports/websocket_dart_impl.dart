@@ -16,6 +16,7 @@ class SIPUAWebSocketImpl {
 
   final String _url;
   WebSocket? _socket;
+  StreamSubscription<dynamic>? _socketSubscription;
   StreamSubscription<dynamic>? _queueSubscription;
   OnOpenCallback? onOpen;
   OnMessageCallback? onMessage;
@@ -43,7 +44,10 @@ class SIPUAWebSocketImpl {
       }
 
       onOpen?.call();
-      _socket!.listen((dynamic data) {
+      final StreamSubscription<dynamic>? oldSocketSub = _socketSubscription;
+      _socketSubscription = null;
+      await oldSocketSub?.cancel();
+      _socketSubscription = _socket!.listen((dynamic data) {
         onMessage?.call(data);
       }, onDone: () {
         final int? code = _socket?.closeCode;
@@ -91,14 +95,55 @@ class SIPUAWebSocketImpl {
   }
 
   void close() {
-    _queueSubscription?.cancel();
+    _closeEmitted = true;
+    try {
+      _socketSubscription?.cancel();
+    } catch (_) {}
+    _socketSubscription = null;
+    try {
+      _queueSubscription?.cancel();
+    } catch (_) {}
     _queueSubscription = null;
-    if (_socket != null) {
+    final WebSocket? ws = _socket;
+    _socket = null;
+    if (ws != null) {
       try {
-        _socket!.close();
+        ws.close();
       } catch (_) {}
     }
+  }
+
+  /// Wait until [WebSocket.done] so the old TLS/TCP session is gone before the
+  /// next [connect]. Otherwise FreeSWITCH may treat the new REGISTER as bound
+  /// to a stale WSS association and operator sync may see "not registered".
+  Future<void> closeAndWaitForDone({
+    Duration waitForDone = const Duration(seconds: 3),
+  }) async {
+    _closeEmitted = true;
+    try {
+      await _socketSubscription?.cancel();
+    } catch (_) {}
+    _socketSubscription = null;
+    try {
+      await _queueSubscription?.cancel();
+    } catch (_) {}
+    _queueSubscription = null;
+    final WebSocket? ws = _socket;
     _socket = null;
+    if (ws == null) {
+      return;
+    }
+    try {
+      ws.close(WebSocketStatus.normalClosure, 'sip ua transport replace');
+    } catch (_) {}
+    try {
+      await ws.done.timeout(waitForDone);
+    } on TimeoutException {
+      logger.w(
+          'WebSocket.done wait timed out after ${waitForDone.inMilliseconds}ms');
+    } catch (_) {
+      // Ignore races during shutdown.
+    }
   }
 
   bool isConnecting() {

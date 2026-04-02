@@ -42,6 +42,7 @@ class SIPUAWebSocket extends SIPUASocketInterface {
   late String _via_transport;
   final String _websocket_protocol = 'sip';
   SIPUAWebSocketImpl? _ws;
+  Future<void>? _socketCloseFuture;
   bool _closed = false;
   bool _connected = false;
   bool _disconnectEmitted = false;
@@ -85,7 +86,7 @@ class SIPUAWebSocket extends SIPUASocketInterface {
     // [SocketTransport._onDisconnect] schedule a second reconnect timer while this
     // same [connect] is already running (CONNECTING). That produces back-to-back
     // recoveries and bogus rapid DISCONNECTED events. Only replace the impl.
-    _silentDisposeSocketImpl();
+    await _silentDisposeSocketImpl();
     logger.d('connecting to WebSocket $_url');
     try {
       _disconnectEmitted = false;
@@ -135,17 +136,37 @@ class SIPUAWebSocket extends SIPUASocketInterface {
   /// Closes the current native socket without notifying [ondisconnect].
   /// Used when swapping implementations during [connect]; transport already
   /// manages recovery and must not see an extra logical disconnect per attempt.
-  void _silentDisposeSocketImpl() {
+  Future<void> _awaitOutstandingSocketClose() async {
+    final Future<void>? f = _socketCloseFuture;
+    _socketCloseFuture = null;
+    if (f != null) {
+      try {
+        await f;
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _silentDisposeSocketImpl() async {
+    await _awaitOutstandingSocketClose();
     if (_ws == null) {
       return;
     }
     logger.d('WebSocket silent dispose before new connect');
+    final SIPUAWebSocketImpl impl = _ws!;
+    _ws = null;
     try {
-      _ws!.close();
+      // Drop listener callbacks so a late [onDone] on the old [WebSocket] cannot
+      // reach [SocketTransport] / UA after the new impl is already REGISTERed.
+      impl.onOpen = null;
+      impl.onMessage = null;
+      impl.onClose = null;
+      _socketCloseFuture = impl.closeAndWaitForDone();
+      await _socketCloseFuture;
     } catch (error) {
       logger.e('silent dispose | error: $error');
+    } finally {
+      _socketCloseFuture = null;
     }
-    _ws = null;
     _connected = false;
     _closed = false;
   }
@@ -157,13 +178,20 @@ class SIPUAWebSocket extends SIPUASocketInterface {
     // Don't wait for the WebSocket 'close' event, do it now.
     _closed = true;
     _connected = false;
-    _onClose(true, 0, 'Client send disconnect');
-    try {
-      if (_ws != null) {
-        _ws!.close();
+    final SIPUAWebSocketImpl? impl = _ws;
+    _ws = null;
+    if (impl != null) {
+      impl.onOpen = null;
+      impl.onMessage = null;
+      impl.onClose = null;
+      _onClose(true, 0, 'Client send disconnect');
+      try {
+        _socketCloseFuture = impl.closeAndWaitForDone();
+      } catch (error) {
+        logger.e('close() | error closing the WebSocket: $error');
       }
-    } catch (error) {
-      logger.e('close() | error closing the WebSocket: $error');
+    } else {
+      _onClose(true, 0, 'Client send disconnect');
     }
   }
 
