@@ -172,6 +172,10 @@ class RTCSession extends EventManager implements Owner {
   final Map<int?, ReferSubscriber> _referSubscribers =
       <int?, ReferSubscriber>{};
 
+  /// Prevents duplicate public ENDED/FAILED emission if teardown is re-entered
+  /// (e.g. FS BYE while local hangup is in progress).
+  bool _sessionTerminationNotified = false;
+
   // Custom session empty object for high level use.
   Map<String, dynamic>? data = <String, dynamic>{};
 
@@ -1590,7 +1594,7 @@ class RTCSession extends EventManager implements Owner {
     return true;
   }
 
-  void _close() async {
+  Future<void> _close() async {
     logger.d('close()');
     if (_status == C.STATUS_TERMINATED) {
       return;
@@ -3758,11 +3762,23 @@ class RTCSession extends EventManager implements Owner {
 
   void _ended(String originator, IncomingRequest? request, ErrorCause cause) {
     logger.d('session ended');
+    if (_sessionTerminationNotified) {
+      logger.d('session ended (duplicate ignored)');
+      unawaited(_close());
+      return;
+    }
+    _sessionTerminationNotified = true;
     _end_time = DateTime.now();
-    _close();
-    logger.d('emit "ended"');
-    emit(EventCallEnded(
-        session: this, originator: originator, request: request, cause: cause));
+    // Emit ENDED only after native PC/stream teardown completes so app code
+    // (track stop, renderers, ringback) does not race flutter_webrtc dispose.
+    _close().whenComplete(() {
+      logger.d('emit "ended"');
+      emit(EventCallEnded(
+          session: this,
+          originator: originator,
+          request: request,
+          cause: cause));
+    });
   }
 
   void _failed(String originator, dynamic message, dynamic request,
@@ -3780,14 +3796,23 @@ class RTCSession extends EventManager implements Owner {
       cause: errorCause,
     ));
 
-    _close();
-    logger.d('emit "failed"');
-    emit(EventCallFailed(
-        session: this,
-        originator: originator,
-        request: request,
-        cause: errorCause,
-        response: response));
+    if (_sessionTerminationNotified) {
+      logger.d(
+          'session failed (cleanup only: public termination already notified)');
+      unawaited(_close());
+      return;
+    }
+    _sessionTerminationNotified = true;
+
+    _close().whenComplete(() {
+      logger.d('emit "failed"');
+      emit(EventCallFailed(
+          session: this,
+          originator: originator,
+          request: request,
+          cause: errorCause,
+          response: response));
+    });
   }
 
   void _onhold(String originator) {
