@@ -712,9 +712,21 @@ class RTCSession extends EventManager implements Owner {
       } else {
         desc = await _createLocalDescription('offer', _rtcOfferConstraints);
       }
-    } catch (e) {
+    } catch (error) {
       request.reply(500);
-      throw Exceptions.TypeError('_createLocalDescription() failed');
+      _failed(
+          'system',
+          null,
+          null,
+          null,
+          500,
+          DartSIP_C.CausesType.WEBRTC_ERROR,
+          'CreateLocalDescription (answer) failed');
+      logger.e(
+          'emit "peerconnection:createlocaldescriptionfailed" [error:${error.toString()}]');
+      emit(EventSetLocalDescriptionFailed(exception: error));
+      // [answer] is not always awaited; avoid throwing into PlatformDispatcher.onError / Sentry noise.
+      return;
     }
 
     if (_status == C.STATUS_TERMINATED) {
@@ -826,7 +838,7 @@ class RTCSession extends EventManager implements Owner {
               'Invalid status_code: $status_code');
         } else if (status_code != null && !skipBye) {
           extraHeaders
-              .add('Reason: SIP ;case=$status_code; text="$reason_phrase"');
+              .add('Reason: SIP ;cause=$status_code; text="$reason_phrase"');
         }
 
         /* RFC 3261 section 15 (Terminating a session):
