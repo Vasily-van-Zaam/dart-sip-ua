@@ -544,13 +544,14 @@ class IncomingRequest extends IncomingMessage {
     List<dynamic> supported = <dynamic>[];
     dynamic to = getHeader('To');
 
-    reason = reason ?? null;
+    if (to == null) {
+      logger.e('IncomingRequest.reply($code): missing To header');
+      return;
+    }
 
-    // Validate code and reason values.
+    // Validate code.
     if (code < 100 || code > 699) {
       throw Exceptions.TypeError('Invalid status_code: $code');
-    } else if (reason != null) {
-      throw Exceptions.TypeError('Invalid reason_phrase: $reason');
     }
 
     reason = reason ?? DartSIP_C.REASON_PHRASE[code] ?? '';
@@ -646,8 +647,18 @@ class IncomingRequest extends IncomingMessage {
     IncomingMessage message = IncomingMessage();
     message.data = response;
 
-    server_transaction!.receiveResponse(code, message,
-        onSuccess as void Function()?, onFailure as void Function()?);
+    final TransactionBase? st = server_transaction;
+    if (st == null) {
+      logger.e(
+        'IncomingRequest.reply($code): server_transaction is null '
+        '(method=${method != null ? SipMethodHelper.getName(method!) : 'null'}); '
+        'cannot send stateful response',
+      );
+      return;
+    }
+
+    st.receiveResponse(code, message, onSuccess as void Function()?,
+        onFailure as void Function()?);
   }
 
   /**
@@ -658,11 +669,8 @@ class IncomingRequest extends IncomingMessage {
   void reply_sl(int code, [String? reason]) {
     List<dynamic> vias = getHeaders('via');
 
-    // Validate code and reason values.
-    if (code == null || (code < 100 || code > 699)) {
+    if (code < 100 || code > 699) {
       throw Exceptions.TypeError('Invalid status_code: $code');
-    } else if (reason != null) {
-      throw Exceptions.TypeError('Invalid reason_phrase: $reason');
     }
 
     reason = reason ?? DartSIP_C.REASON_PHRASE[code] ?? '';

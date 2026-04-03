@@ -2031,10 +2031,9 @@ class RTCSession extends EventManager implements Owner {
       return true;
     }
 
-    // Mirror _receiveUpdate: _processInDialogSdpOffer may reply 488 and then
-    // throw Exceptions.TypeError (extends AssertionError) when
-    // setRemoteDescription fails — that must not become an unhandled async error.
-    late final RTCSessionDescription desc;
+    // _processInDialogSdpOffer sends appropriate SIP error responses and returns
+    // null on failure (including session terminated during negotiation).
+    late final RTCSessionDescription? desc;
     try {
       desc = await _processInDialogSdpOffer(request);
     } catch (error, stackTrace) {
@@ -2043,6 +2042,10 @@ class RTCSession extends EventManager implements Owner {
       );
       return;
     }
+    if (desc == null) {
+      return;
+    }
+    final RTCSessionDescription reinviteAnswer = desc;
 
     Future<bool> acceptReInvite(dynamic options) async {
       try {
@@ -2050,7 +2053,7 @@ class RTCSession extends EventManager implements Owner {
         if (_status == C.STATUS_TERMINATED) {
           return false;
         }
-        sendAnswer(desc.sdp);
+        sendAnswer(reinviteAnswer.sdp);
       } catch (error) {
         logger.e('Got anerror on re-INVITE: ${error.toString()}');
       }
@@ -2136,8 +2139,8 @@ class RTCSession extends EventManager implements Owner {
     }
 
     try {
-      RTCSessionDescription desc = await _processInDialogSdpOffer(request);
-      if (_status == C.STATUS_TERMINATED) return;
+      RTCSessionDescription? desc = await _processInDialogSdpOffer(request);
+      if (desc == null || _status == C.STATUS_TERMINATED) return;
       // Send answer.
       sendAnswer(desc.sdp);
     } catch (error) {
@@ -2145,7 +2148,7 @@ class RTCSession extends EventManager implements Owner {
     }
   }
 
-  Future<RTCSessionDescription> _processInDialogSdpOffer(
+  Future<RTCSessionDescription?> _processInDialogSdpOffer(
       IncomingRequest request) async {
     logger.d('_processInDialogSdpOffer()');
 
@@ -2224,23 +2227,36 @@ class RTCSession extends EventManager implements Owner {
     RTCSessionDescription offer = RTCSessionDescription(processedSDP, 'offer');
 
     if (_status == C.STATUS_TERMINATED) {
-      throw Exceptions.InvalidStateError('terminated');
+      try {
+        request.reply(481);
+      } catch (e, st) {
+        logger.e('reply(481) after terminated (pre setRemoteDescription): $e\n$st');
+      }
+      return null;
     }
     try {
       await _connection!.setRemoteDescription(offer);
     } catch (error) {
-      request.reply(488);
+      try {
+        request.reply(488);
+      } catch (e, st) {
+        logger.e('reply(488) after setRemoteDescription failure: $e\n$st');
+      }
       logger.e(
           'emit "peerconnection:setremotedescriptionfailed" [error:${error.toString()}]');
 
       emit(EventSetRemoteDescriptionFailed(exception: error));
 
-      throw Exceptions.TypeError(
-          'peerconnection.setRemoteDescription() failed');
+      return null;
     }
 
     if (_status == C.STATUS_TERMINATED) {
-      throw Exceptions.InvalidStateError('terminated');
+      try {
+        request.reply(500);
+      } catch (e, st) {
+        logger.e('reply(500) after terminated (post setRemoteDescription): $e\n$st');
+      }
+      return null;
     }
 
     if (_remoteHold == true && hold == false) {
@@ -2254,14 +2270,24 @@ class RTCSession extends EventManager implements Owner {
     // Create local description.
 
     if (_status == C.STATUS_TERMINATED) {
-      throw Exceptions.InvalidStateError('terminated');
+      try {
+        request.reply(500);
+      } catch (e, st) {
+        logger.e(
+            'reply(500) after terminated (before createLocalDescription): $e\n$st');
+      }
+      return null;
     }
 
     try {
       return await _createLocalDescription('answer', _rtcAnswerConstraints);
     } catch (_) {
-      request.reply(500);
-      throw Exceptions.TypeError('_createLocalDescription() failed');
+      try {
+        request.reply(500);
+      } catch (e, st) {
+        logger.e('reply(500) after _createLocalDescription failure: $e\n$st');
+      }
+      return null;
     }
   }
 
