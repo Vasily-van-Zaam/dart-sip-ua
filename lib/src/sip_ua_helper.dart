@@ -823,13 +823,13 @@ class RegisterParams {
 }
 
 class WebSocketSettings {
-  /// Add additional HTTP headers, such as:'Origin','Host' or others
+  /// Add additional HTTP headers, such as:’Origin’,’Host’ or others
   Map<String, dynamic> extraHeaders = <String, dynamic>{};
 
   /// `User Agent` field for dart http client.
   String? userAgent;
 
-  /// Don‘t check the server certificate
+  /// Don’t check the server certificate
   /// for self-signed certificate.
   bool allowBadCertificate = false;
 
@@ -840,6 +840,12 @@ class WebSocketSettings {
 
   /// Max time to wait for websocket handshake while in CONNECTING state.
   int connectionConnectTimeoutSec = 8;
+
+  /// WebSocket-level ping interval (RFC 6455 opcode 0x9).
+  /// If the remote side does not respond with pong within this interval,
+  /// Dart will close the socket automatically, triggering onDone/onClose.
+  /// Set to 0 to disable. Default: 15 seconds.
+  int pingIntervalSec = 15;
 }
 
 class TcpSocketSettings {

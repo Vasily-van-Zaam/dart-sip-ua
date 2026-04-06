@@ -347,8 +347,8 @@ class UA extends EventManager {
     _stopTransportOptionsProbe();
     _cancelPostReconnectRegisterTimer();
 
-    // Remove dynamic settings.
-    _dynConfiguration = null;
+    // Keep dynamic settings object to avoid null deref on late transport callbacks.
+    _dynConfiguration ??= DynamicSettings();
 
     if (_status == C.STATUS_USER_CLOSED) {
       logger.d('UA already closed');
@@ -1076,52 +1076,68 @@ class UA extends EventManager {
 
 // Transport data event.
   void onTransportData(SocketTransport transport, String messageData) {
-    _lastTransportActivityAt = DateTime.now();
-    IncomingMessage? message = Parser.parseMessage(messageData, this);
+    try {
+      _lastTransportActivityAt = DateTime.now();
+      IncomingMessage? message = Parser.parseMessage(messageData, this);
 
-    if (message == null) {
-      return;
-    }
-
-    if (_status == C.STATUS_USER_CLOSED && message is IncomingRequest) {
-      return;
-    }
-
-    // Do some sanity check.
-    if (!sanityCheck(message, this, transport)) {
-      logger.w(
-          'Incoming message did not pass sanity test, dumping it: \n\n $message');
-      return;
-    }
-
-    if (message is IncomingRequest) {
-      message.transport = transport;
-      receiveRequest(message);
-    } else if (message is IncomingResponse) {
-      /* Unike stated in 18.1.2, if a response does not match
-    * any transaction, it is discarded here and no passed to the core
-    * in order to be discarded there.
-    */
-
-      switch (message.method) {
-        case SipMethod.INVITE:
-          InviteClientTransaction? transaction = _transactions.getTransaction(
-              InviteClientTransaction, message.via_branch!);
-          if (transaction != null) {
-            transaction.receiveResponse(message.status_code, message);
-          }
-          break;
-        case SipMethod.ACK:
-          // Just in case ;-).
-          break;
-        default:
-          NonInviteClientTransaction? transaction = _transactions
-              .getTransaction(NonInviteClientTransaction, message.via_branch!);
-          if (transaction != null) {
-            transaction.receiveResponse(message.status_code, message);
-          }
-          break;
+      if (message == null) {
+        return;
       }
+
+      if (_status == C.STATUS_USER_CLOSED && message is IncomingRequest) {
+        return;
+      }
+
+      // Do some sanity check.
+      if (!sanityCheck(message, this, transport)) {
+        logger.w(
+            'Incoming message did not pass sanity test, dumping it: \n\n $message');
+        return;
+      }
+
+      if (message is IncomingRequest) {
+        message.transport = transport;
+        receiveRequest(message);
+      } else if (message is IncomingResponse) {
+        /* Unike stated in 18.1.2, if a response does not match
+      * any transaction, it is discarded here and no passed to the core
+      * in order to be discarded there.
+      */
+
+        switch (message.method) {
+          case SipMethod.INVITE:
+            InviteClientTransaction? transaction = _transactions.getTransaction(
+                InviteClientTransaction, message.via_branch!);
+            if (transaction != null) {
+              transaction.receiveResponse(message.status_code, message);
+            } else if (message.status_code >= 200) {
+              logger.d(
+                '📍 SIP-DIAG [LATE-RESPONSE] '
+                'status=${message.status_code} '
+                'branch=${message.via_branch} '
+                'call_id=${message.call_id} '
+                'cseq=${message.cseq} '
+                'from_tag=${message.from_tag} '
+                'to_tag=${message.to_tag} '
+                'active_sessions=${_sessions.keys.toList()} '
+                '— transaction already destroyed (Timer B fired?)',
+              );
+            }
+            break;
+          case SipMethod.ACK:
+            // Just in case ;-).
+            break;
+          default:
+            NonInviteClientTransaction? transaction = _transactions
+                .getTransaction(NonInviteClientTransaction, message.via_branch!);
+            if (transaction != null) {
+              transaction.receiveResponse(message.status_code, message);
+            }
+            break;
+        }
+      }
+    } catch (e, s) {
+      logger.e('onTransportData crash: $e', error: e, stackTrace: s);
     }
   }
 

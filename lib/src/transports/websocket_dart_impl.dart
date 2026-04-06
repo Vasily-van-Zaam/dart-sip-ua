@@ -43,6 +43,15 @@ class SIPUAWebSocketImpl {
             .timeout(connectTimeout);
       }
 
+      // Enable WebSocket-level ping/pong (RFC 6455 opcode 0x9/0xA).
+      // If pong is not received within this interval, Dart closes the socket
+      // automatically, triggering onDone → _emitClose → reconnect.
+      final int pingSec = webSocketSettings.pingIntervalSec;
+      if (pingSec > 0) {
+        _socket!.pingInterval = Duration(seconds: pingSec);
+        logger.d('WebSocket pingInterval set to ${pingSec}s');
+      }
+
       onOpen?.call();
       final StreamSubscription<dynamic>? oldSocketSub = _socketSubscription;
       _socketSubscription = null;

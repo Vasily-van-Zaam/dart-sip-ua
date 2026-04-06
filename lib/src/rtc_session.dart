@@ -1527,6 +1527,14 @@ class RTCSession extends EventManager implements Owner {
   void onRequestTimeout() {
     logger.e('onRequestTimeout()');
 
+    logger.d(
+      '📍 SIP-DIAG [REQUEST-TIMEOUT] session=$id '
+      'status=$_status '
+      'direction=$_direction '
+      'call_id=${_request?.call_id} '
+      '— will terminate with 408',
+    );
+
     if (_status != C.STATUS_TERMINATED) {
       terminate(<String, dynamic>{
         'status_code': 408,
@@ -1658,6 +1666,12 @@ class RTCSession extends EventManager implements Owner {
     // Terminate REFER subscribers.
     _referSubscribers.clear();
 
+    logger.d(
+      '📍 SIP-DIAG [SESSION-CLOSE] session=$id '
+      'call_id=${_request?.call_id} '
+      'direction=$_direction '
+      '— removed from ua._sessions',
+    );
     _ua.destroyRTCSession(this);
   }
 
@@ -1743,10 +1757,15 @@ class RTCSession extends EventManager implements Owner {
     _connection!.onIceConnectionState = (RTCIceConnectionState state) {
       // TODO(cloudwebrtc): Do more with different states.
       if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
+        // Do NOT pass status_code here: when the session is still in the
+        // INVITE/1XX phase, terminate() builds a CANCEL. If status_code is
+        // set, it adds a "Reason: SIP ;cause=<code>" header.  FreeSWITCH
+        // treats CANCEL with cause=408 ("RTP Timeout") as a network-level
+        // event and may NOT propagate it to the B-leg, leaving zombie
+        // channels.  Omitting status_code sends a plain CANCEL (no Reason
+        // header) which FS always forwards correctly.
         terminate(<String, dynamic>{
           'cause': DartSIP_C.CausesType.RTP_TIMEOUT,
-          'status_code': 408,
-          'reason_phrase': DartSIP_C.CausesType.RTP_TIMEOUT
         });
       } else if (state ==
           RTCIceConnectionState.RTCIceConnectionStateDisconnected) {

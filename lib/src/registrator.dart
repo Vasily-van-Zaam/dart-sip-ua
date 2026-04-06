@@ -345,6 +345,14 @@ class Registrator {
       _registered = false;
       _ua.unregistered();
     }
+
+    // Generate a new Call-ID for the next registration cycle so that
+    // FreeSWITCH treats the new registration as independent from the old one.
+    // Without this, FS may process the old WebSocket timeout *after* the new
+    // REGISTER succeeds and nuke the registration because both share the same
+    // Call-ID.  RFC 3261 §10.2 allows a new Call-ID on re-registration.
+    _call_id = utils.createRandomToken(22);
+    _cseq = 0;
   }
 
   /// Rebuild Contact / registrar from current [UA] (needed after TCP bind

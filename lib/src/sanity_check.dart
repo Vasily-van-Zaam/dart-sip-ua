@@ -123,6 +123,13 @@ bool rfc3261_8_2_2_2() {
   String? fromTag = message.from_tag;
   String? call_id = message.call_id;
   int? cseq = message.cseq;
+  final String? branch = message.via_branch;
+
+  // Reject malformed requests missing Via branch to avoid null-deref crashes.
+  if (branch == null) {
+    reply(400);
+    return false;
+  }
 
   // Accept any in-dialog request.
   if (message.to_tag != null) {
@@ -136,7 +143,7 @@ bool rfc3261_8_2_2_2() {
     // and ignore the INVITE.
     // TODO(cloudwebrtc): we should reply the last response.
     if (ua.transactions
-            .getTransaction(InviteServerTransaction, message.via_branch!) !=
+            .getTransaction(InviteServerTransaction, branch) !=
         null) {
       result = false;
     }
@@ -158,7 +165,7 @@ bool rfc3261_8_2_2_2() {
   // and ignore the request.
   // TODO(cloudwebrtc): we should reply the last response.
   else if (ua.transactions
-          .getTransaction(NonInviteServerTransaction, message.via_branch!) !=
+          .getTransaction(NonInviteServerTransaction, branch) !=
       null) {
     result = false;
   }

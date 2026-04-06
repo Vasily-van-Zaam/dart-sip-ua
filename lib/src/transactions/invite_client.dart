@@ -80,6 +80,13 @@ class InviteClientTransaction extends TransactionBase {
   void timer_B() {
     logger.d('Timer B expired for transaction $id');
     if (state == TransactionState.CALLING) {
+      logger.d(
+        '📍 SIP-DIAG [TIMER-B] transaction=$id '
+        'call_id=${request.getHeader('call-id')} '
+        'cseq=${request.cseq} '
+        'ruri=${request.ruri} '
+        '— destroying transaction, late responses will be dropped',
+      );
       stateChanged(TransactionState.TERMINATED);
       ua.destroyTransaction(this);
       _eventHandlers.emit(EventOnRequestTimeout());
@@ -129,7 +136,7 @@ class InviteClientTransaction extends TransactionBase {
     cancel.setHeader('via', request.getHeader('via'));
     cancel.setHeader('to', request.getHeader('to'));
 
-    if (reason != null) {
+    if (reason != null && reason.isNotEmpty) {
       cancel.setHeader('reason', reason);
     }
 

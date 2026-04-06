@@ -26,7 +26,8 @@ class RequestSender {
 
     // If ua is in closing process or even closed just allow sending Bye and ACK.
     if (ua.status == UAC.C.STATUS_USER_CLOSED &&
-        (_method != SipMethod.BYE || _method != SipMethod.ACK)) {
+        _method != SipMethod.BYE &&
+        _method != SipMethod.ACK) {
       _eventHandlers.emit(EventOnTransportError());
     }
   }
