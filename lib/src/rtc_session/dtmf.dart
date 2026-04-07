@@ -37,7 +37,7 @@ class DTMF extends EventManager {
 
   String? get direction => _direction;
 
-  void send(String tone, Map<String, dynamic> options) {
+  Future<void> send(String tone, Map<String, dynamic> options) async {
     if (tone == null) {
       throw Exceptions.TypeError('Not enough arguments');
     }
@@ -68,7 +68,10 @@ class DTMF extends EventManager {
     _interToneGap = options['interToneGap'];
 
     if (_mode == DtmfMode.RFC2833) {
-      RTCDTMFSender dtmfSender = _session.dtmfSender;
+      final dtmfSender = await _session.getDtmfSender();
+      if (dtmfSender == null) {
+        throw Exceptions.InvalidStateError('DTMF sender not available');
+      }
       dtmfSender.insertDTMF(_tone!,
           duration: _duration!, interToneGap: _interToneGap!);
     } else if (_mode == DtmfMode.INFO) {

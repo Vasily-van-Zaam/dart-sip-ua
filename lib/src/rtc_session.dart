@@ -202,23 +202,21 @@ class RTCSession extends EventManager implements Owner {
   @override
   int get TerminatedCode => C.STATUS_TERMINATED;
 
-  RTCDTMFSender get dtmfSender {
+  Future<RTCDTMFSender?> getDtmfSender() async {
     final conn = _connection;
     if (conn == null) {
       throw Exceptions.InvalidStateError(
           'Cannot create DTMF sender: peerConnection is null');
     }
-    final stream = _localMediaStream;
-    if (stream == null) {
+    final senders = await conn.getSenders();
+    final audioSender = senders.where(
+      (s) => s.track?.kind == 'audio',
+    ).firstOrNull;
+    if (audioSender == null) {
       throw Exceptions.InvalidStateError(
-          'Cannot create DTMF sender: local media stream is null');
+          'Cannot create DTMF sender: no audio sender found');
     }
-    final audioTracks = stream.getAudioTracks();
-    if (audioTracks.isEmpty) {
-      throw Exceptions.InvalidStateError(
-          'Cannot create DTMF sender: no audio tracks available');
-    }
-    return conn.createDtmfSender(audioTracks[0]);
+    return audioSender.dtmf;
   }
 
   String? get contact => _contact;
@@ -673,19 +671,9 @@ class RTCSession extends EventManager implements Owner {
     _localMediaStream = stream;
 
     if (stream != null) {
-      switch (sdpSemantics) {
-        case 'unified-plan':
-          stream.getTracks().forEach((MediaStreamTrack track) {
-            _connection!.addTrack(track, stream!);
-          });
-          break;
-        case 'plan-b':
-          _connection!.addStream(stream);
-          break;
-        default:
-          logger.e('Unkown sdp semantics $sdpSemantics');
-          throw Exceptions.NotReadyError('Unkown sdp semantics $sdpSemantics');
-      }
+      stream.getTracks().forEach((MediaStreamTrack track) {
+        _connection!.addTrack(track, stream!);
+      });
     }
 
     // Set remote description.
@@ -1034,7 +1022,7 @@ class RTCSession extends EventManager implements Owner {
 
           options!['eventHandlers'] = handlers;
 
-          dtmf.send(tone, options);
+          await dtmf.send(tone, options);
           await Future<void>.delayed(
               Duration(milliseconds: sendInterval), () {});
         });
@@ -1802,22 +1790,12 @@ class RTCSession extends EventManager implements Owner {
       sdpSemantics = pcConfig['sdpSemantics'];
     }
 
-    switch (sdpSemantics) {
-      case 'unified-plan':
-        _connection!.onTrack = (RTCTrackEvent event) {
-          if (event.streams.isNotEmpty) {
-            emit(EventStream(
-                session: this, originator: 'remote', stream: event.streams[0]));
-          }
-        };
-        break;
-      case 'plan-b':
-        _connection!.onAddStream = (MediaStream stream) {
-          emit(
-              EventStream(session: this, originator: 'remote', stream: stream));
-        };
-        break;
-    }
+    _connection!.onTrack = (RTCTrackEvent event) {
+      if (event.streams.isNotEmpty) {
+        emit(EventStream(
+            session: this, originator: 'remote', stream: event.streams[0]));
+      }
+    };
 
     logger.d('emit "peerconnection"');
     emit(EventPeerConnection(_connection));
@@ -2602,19 +2580,9 @@ class RTCSession extends EventManager implements Owner {
     _localMediaStream = stream;
 
     if (stream != null) {
-      switch (sdpSemantics) {
-        case 'unified-plan':
-          stream.getTracks().forEach((MediaStreamTrack track) {
-            _connection!.addTrack(track, stream!);
-          });
-          break;
-        case 'plan-b':
-          _connection!.addStream(stream);
-          break;
-        default:
-          logger.e('Unkown sdp semantics $sdpSemantics');
-          throw Exceptions.NotReadyError('Unkown sdp semantics $sdpSemantics');
-      }
+      stream.getTracks().forEach((MediaStreamTrack track) {
+        _connection!.addTrack(track, stream!);
+      });
     }
 
     // TODO(cloudwebrtc): should this be triggered here?
@@ -3044,21 +3012,12 @@ class RTCSession extends EventManager implements Owner {
           await navigator.mediaDevices.getUserMedia(mediaConstraints);
       _localMediaStreamLocallyGenerated = true;
 
-      switch (sdpSemantics) {
-        case 'unified-plan':
-          localStream.getTracks().forEach((MediaStreamTrack track) {
-            if (track.kind == 'video')
-              _connection!.addTrack(track, localStream);
-            _localMediaStream?.addTrack(track);
-          });
-          break;
-        case 'plan-b':
-          _connection!.addStream(localStream);
-          break;
-        default:
-          logger.e('Unkown sdp semantics $sdpSemantics');
-          throw Exceptions.NotReadyError('Unkown sdp semantics $sdpSemantics');
-      }
+      localStream.getTracks().forEach((MediaStreamTrack track) {
+        if (track.kind == 'video') {
+          _connection!.addTrack(track, localStream);
+        }
+        _localMediaStream?.addTrack(track);
+      });
 
       emit(EventStream(
           session: this, originator: 'local', stream: _localMediaStream));

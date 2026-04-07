@@ -582,25 +582,23 @@ class Call {
     refer.on(EventReferFailed(), (EventReferFailed data) {});
   }
 
-  void hangup([Map<String, dynamic>? options]) {
+  Future<void> hangup([Map<String, dynamic>? options]) async {
     assert(_session != null, 'ERROR(hangup): rtc session is invalid!');
     if (peerConnection != null) {
-      for (MediaStream? stream in peerConnection!.getLocalStreams()) {
-        if (stream == null) continue;
-        logger.d(
-            'Stopping local stream with tracks: ${stream.getTracks().length}');
-        for (MediaStreamTrack track in stream.getTracks()) {
-          logger.d('Stopping track: ${track.kind}${track.id} ');
-          track.stop();
+      final senders = await peerConnection!.getSenders();
+      for (final sender in senders) {
+        final track = sender.track;
+        if (track != null) {
+          logger.d('Stopping sender track: ${track.kind} ${track.id}');
+          await track.stop();
         }
       }
-      for (MediaStream? stream in peerConnection!.getRemoteStreams()) {
-        if (stream == null) continue;
-        logger.d(
-            'Stopping remote stream with tracks: ${stream.getTracks().length}');
-        for (MediaStreamTrack track in stream.getTracks()) {
-          logger.d('Stopping track: ${track.kind}${track.id} ');
-          track.stop();
+      final receivers = await peerConnection!.getReceivers();
+      for (final receiver in receivers) {
+        final track = receiver.track;
+        if (track != null) {
+          logger.d('Stopping receiver track: ${track.kind} ${track.id}');
+          await track.stop();
         }
       }
     } else {
