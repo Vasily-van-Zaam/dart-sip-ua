@@ -29,48 +29,62 @@ class SIPUAWebSocketImpl {
     _closeEmitted = false;
     handleQueue();
     logger.i('connect $_url, ${webSocketSettings.extraHeaders}, $protocols');
-    try {
-      final int connectTimeoutSec = webSocketSettings.connectionConnectTimeoutSec;
-      final Duration connectTimeout = Duration(
-          seconds: connectTimeoutSec > 0 ? connectTimeoutSec : 8);
-      if (webSocketSettings.allowBadCertificate) {
-        /// Allow self-signed certificate, for test only.
-        _socket = await _connectForBadCertificate(_url, webSocketSettings)
-            .timeout(connectTimeout);
+    // Run the entire connection lifecycle inside a guarded zone so that
+    // asynchronous SocketExceptions thrown by Dart's _RawSecureSocket after
+    // the TLS socket is closed ("Reading from a closed socket") are caught
+    // instead of bubbling up as unhandled exceptions.
+    runZonedGuarded(() async {
+      try {
+        final int connectTimeoutSec = webSocketSettings.connectionConnectTimeoutSec;
+        final Duration connectTimeout = Duration(
+            seconds: connectTimeoutSec > 0 ? connectTimeoutSec : 8);
+        if (webSocketSettings.allowBadCertificate) {
+          /// Allow self-signed certificate, for test only.
+          _socket = await _connectForBadCertificate(_url, webSocketSettings)
+              .timeout(connectTimeout);
+        } else {
+          _socket = await WebSocket.connect(_url,
+                  protocols: protocols, headers: webSocketSettings.extraHeaders)
+              .timeout(connectTimeout);
+        }
+
+        // Enable WebSocket-level ping/pong (RFC 6455 opcode 0x9/0xA).
+        // If pong is not received within this interval, Dart closes the socket
+        // automatically, triggering onDone → _emitClose → reconnect.
+        final int pingSec = webSocketSettings.pingIntervalSec;
+        if (pingSec > 0) {
+          _socket!.pingInterval = Duration(seconds: pingSec);
+          logger.d('WebSocket pingInterval set to ${pingSec}s');
+        }
+
+        onOpen?.call();
+        final StreamSubscription<dynamic>? oldSocketSub = _socketSubscription;
+        _socketSubscription = null;
+        await oldSocketSub?.cancel();
+        _socketSubscription = _socket!.listen((dynamic data) {
+          onMessage?.call(data);
+        }, onDone: () {
+          final int? code = _socket?.closeCode;
+          final String reason = _socket?.closeReason ?? '';
+          final bool clean = code == 1000 || code == 1001;
+          _emitClose(code, reason, wasClean: clean);
+        }, onError: (Object e, StackTrace _) {
+          _emitClose(499, e.toString(), wasClean: false);
+        });
+      } on TimeoutException {
+        _emitClose(408, 'connect timeout', wasClean: false);
+      } catch (e) {
+        _emitClose(500, e.toString(), wasClean: false);
+      }
+    }, (Object error, StackTrace stack) {
+      // Absorb SocketException from Dart's _RawSecureSocket that can fire
+      // asynchronously after the TLS socket is closed.
+      if (error is SocketException) {
+        logger.d('Suppressed post-close SocketException: $error');
       } else {
-        _socket = await WebSocket.connect(_url,
-                protocols: protocols, headers: webSocketSettings.extraHeaders)
-            .timeout(connectTimeout);
+        logger.e('Unexpected error in WebSocket zone: $error\n$stack');
       }
-
-      // Enable WebSocket-level ping/pong (RFC 6455 opcode 0x9/0xA).
-      // If pong is not received within this interval, Dart closes the socket
-      // automatically, triggering onDone → _emitClose → reconnect.
-      final int pingSec = webSocketSettings.pingIntervalSec;
-      if (pingSec > 0) {
-        _socket!.pingInterval = Duration(seconds: pingSec);
-        logger.d('WebSocket pingInterval set to ${pingSec}s');
-      }
-
-      onOpen?.call();
-      final StreamSubscription<dynamic>? oldSocketSub = _socketSubscription;
-      _socketSubscription = null;
-      await oldSocketSub?.cancel();
-      _socketSubscription = _socket!.listen((dynamic data) {
-        onMessage?.call(data);
-      }, onDone: () {
-        final int? code = _socket?.closeCode;
-        final String reason = _socket?.closeReason ?? '';
-        final bool clean = code == 1000 || code == 1001;
-        _emitClose(code, reason, wasClean: clean);
-      }, onError: (Object e, StackTrace _) {
-        _emitClose(499, e.toString(), wasClean: false);
-      });
-    } on TimeoutException {
-      _emitClose(408, 'connect timeout', wasClean: false);
-    } catch (e) {
-      _emitClose(500, e.toString(), wasClean: false);
-    }
+    });
   }
 
   final StreamController<dynamic> queue = StreamController<dynamic>.broadcast();

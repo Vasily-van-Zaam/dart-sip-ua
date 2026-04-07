@@ -146,9 +146,10 @@ class InviteClientTransaction extends TransactionBase {
   @override
   void receiveResponse(int? status_code, IncomingMessage response,
       [void Function()? onSuccess, void Function()? onFailure]) {
-    int status_code = response.status_code;
+    // Use status_code from the actual response (parameter may be stale/null).
+    final int responseCode = response.status_code;
 
-    if (status_code >= 100 && status_code <= 199) {
+    if (responseCode >= 100 && responseCode <= 199) {
       switch (state) {
         case TransactionState.CALLING:
           clearTimeout(B);
@@ -163,7 +164,7 @@ class InviteClientTransaction extends TransactionBase {
         default:
           break;
       }
-    } else if (status_code >= 200 && status_code <= 299) {
+    } else if (responseCode >= 200 && responseCode <= 299) {
       switch (state) {
         case TransactionState.CALLING:
         case TransactionState.PROCEEDING:
@@ -182,7 +183,7 @@ class InviteClientTransaction extends TransactionBase {
         default:
           break;
       }
-    } else if (status_code >= 300 && status_code <= 699) {
+    } else if (responseCode >= 300 && responseCode <= 699) {
       switch (state) {
         case TransactionState.CALLING:
         case TransactionState.PROCEEDING:

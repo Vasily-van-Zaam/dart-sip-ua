@@ -1,0 +1,47 @@
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">DiaWatch vascular tree</title>
+  <desc id="desc">A living tree made of intertwined vessels feeding many leaves, symbolizing glucose flow and life.</desc>
+  <defs>
+    <linearGradient id="vessel" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#c1273d" />
+      <stop offset="100%" stop-color="#7a0f28" />
+    </linearGradient>
+    <linearGradient id="leaf" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7de7c6" />
+      <stop offset="100%" stop-color="#1f8fff" />
+    </linearGradient>
+  </defs>
+  <!-- ground -->
+  <ellipse cx="128" cy="204" rx="82" ry="16" fill="#0d2e52" opacity="0.12" />
+  <!-- intertwined trunk -->
+  <path d="M118 204 C112 182 122 162 118 140 C114 118 104 104 108 86"
+        fill="none" stroke="url(#vessel)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M138 204 C144 182 134 162 138 140 C142 118 152 104 148 86"
+        fill="none" stroke="url(#vessel)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" />
+  <!-- crossover ligaments -->
+  <path d="M122 158 C130 150 138 150 146 158" fill="none" stroke="url(#vessel)" stroke-width="8" stroke-linecap="round" />
+  <path d="M114 124 C126 118 140 118 150 124" fill="none" stroke="url(#vessel)" stroke-width="8" stroke-linecap="round" />
+  <!-- branches to many leaves -->
+  <path d="M122 136 C96 134 78 126 66 116" fill="none" stroke="url(#vessel)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M118 124 C94 114 78 104 70 90" fill="none" stroke="url(#vessel)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M124 150 C102 160 86 172 76 188" fill="none" stroke="url(#vessel)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M134 136 C160 134 178 126 190 116" fill="none" stroke="url(#vessel)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M138 124 C162 114 178 104 186 90" fill="none" stroke="url(#vessel)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M132 150 C154 160 170 172 180 188" fill="none" stroke="url(#vessel)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M128 110 C128 94 128 78 128 62" fill="none" stroke="url(#vessel)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" />
+  <!-- leaves at branch tips -->
+  <path d="M64 114 C54 118 52 130 60 136 C68 142 82 138 84 128 C86 118 74 110 64 114 Z" fill="url(#leaf)" />
+  <path d="M68 88 C58 92 56 104 64 110 C72 116 86 112 88 102 C90 92 78 84 68 88 Z" fill="url(#leaf)" />
+  <path d="M74 188 C64 190 60 202 68 208 C76 214 90 210 92 200 C94 190 84 186 74 188 Z" fill="url(#leaf)" />
+  <path d="M192 114 C202 118 204 130 196 136 C188 142 174 138 172 128 C170 118 182 110 192 114 Z" fill="url(#leaf)" />
+  <path d="M188 88 C198 92 200 104 192 110 C184 116 170 112 168 102 C166 92 178 84 188 88 Z" fill="url(#leaf)" />
+  <path d="M182 188 C192 190 196 202 188 208 C180 214 166 210 164 200 C162 190 172 186 182 188 Z" fill="url(#leaf)" />
+  <path d="M128 46 C118 48 114 60 122 66 C130 72 144 70 146 60 C148 50 138 44 128 46 Z" fill="url(#leaf)" />
+  <!-- small connecting buds along branches -->
+  <circle cx="92" cy="128" r="4" fill="url(#leaf)" />
+  <circle cx="104" cy="114" r="4" fill="url(#leaf)" />
+  <circle cx="116" cy="166" r="4" fill="url(#leaf)" />
+  <circle cx="164" cy="128" r="4" fill="url(#leaf)" />
+  <circle cx="152" cy="114" r="4" fill="url(#leaf)" />
+  <circle cx="142" cy="166" r="4" fill="url(#leaf)" />
+</svg>

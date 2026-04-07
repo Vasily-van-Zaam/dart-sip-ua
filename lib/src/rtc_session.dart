@@ -202,8 +202,24 @@ class RTCSession extends EventManager implements Owner {
   @override
   int get TerminatedCode => C.STATUS_TERMINATED;
 
-  RTCDTMFSender get dtmfSender =>
-      _connection!.createDtmfSender(_localMediaStream!.getAudioTracks()[0]);
+  RTCDTMFSender get dtmfSender {
+    final conn = _connection;
+    if (conn == null) {
+      throw Exceptions.InvalidStateError(
+          'Cannot create DTMF sender: peerConnection is null');
+    }
+    final stream = _localMediaStream;
+    if (stream == null) {
+      throw Exceptions.InvalidStateError(
+          'Cannot create DTMF sender: local media stream is null');
+    }
+    final audioTracks = stream.getAudioTracks();
+    if (audioTracks.isEmpty) {
+      throw Exceptions.InvalidStateError(
+          'Cannot create DTMF sender: no audio tracks available');
+    }
+    return conn.createDtmfSender(audioTracks[0]);
+  }
 
   String? get contact => _contact;
 
@@ -440,6 +456,7 @@ class RTCSession extends EventManager implements Owner {
 
     // Set userNoAnswerTimer.
     _timers.userNoAnswerTimer = setTimeout(() {
+      if (_status == C.STATUS_TERMINATED) return;
       request.reply(408);
       _failed('local', null, null, null, 408, DartSIP_C.CausesType.NO_ANSWER,
           'No Answer');
@@ -1351,7 +1368,12 @@ class RTCSession extends EventManager implements Owner {
       [Map<String, dynamic>? options]) {
     logger.d('sendRequest()');
 
-    return _dialog!.sendRequest(method, options);
+    final dialog = _dialog;
+    if (dialog == null) {
+      throw Exceptions.InvalidStateError(
+          'Cannot send ${method.name}: dialog is null (session not established or already closed)');
+    }
+    return dialog.sendRequest(method, options);
   }
 
   /**
@@ -1711,6 +1733,7 @@ class RTCSession extends EventManager implements Owner {
    */
   void _setACKTimer() {
     _timers.ackTimer = setTimeout(() {
+      if (_status == C.STATUS_TERMINATED) return;
       if (_status == C.STATUS_WAITING_FOR_ACK) {
         logger.d('no ACK received, terminating the session');
 
