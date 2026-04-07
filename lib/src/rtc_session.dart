@@ -216,7 +216,8 @@ class RTCSession extends EventManager implements Owner {
       throw Exceptions.InvalidStateError(
           'Cannot create DTMF sender: no audio sender found');
     }
-    return audioSender.dtmf;
+    final audioTrack = audioSender.track!;
+    return conn.createDtmfSender(audioTrack);
   }
 
   String? get contact => _contact;

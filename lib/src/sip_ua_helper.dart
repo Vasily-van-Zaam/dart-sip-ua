@@ -585,21 +585,29 @@ class Call {
   Future<void> hangup([Map<String, dynamic>? options]) async {
     assert(_session != null, 'ERROR(hangup): rtc session is invalid!');
     if (peerConnection != null) {
-      final senders = await peerConnection!.getSenders();
-      for (final sender in senders) {
-        final track = sender.track;
-        if (track != null) {
-          logger.d('Stopping sender track: ${track.kind} ${track.id}');
-          await track.stop();
+      try {
+        final senders = await peerConnection!.getSenders();
+        for (final sender in senders) {
+          final track = sender.track;
+          if (track != null) {
+            logger.d('Stopping sender track: ${track.kind} ${track.id}');
+            await track.stop();
+          }
         }
+      } catch (e) {
+        logger.d('hangup: getSenders/stop failed (PC may be disposed): $e');
       }
-      final receivers = await peerConnection!.getReceivers();
-      for (final receiver in receivers) {
-        final track = receiver.track;
-        if (track != null) {
-          logger.d('Stopping receiver track: ${track.kind} ${track.id}');
-          await track.stop();
+      try {
+        final receivers = await peerConnection!.getReceivers();
+        for (final receiver in receivers) {
+          final track = receiver.track;
+          if (track != null) {
+            logger.d('Stopping receiver track: ${track.kind} ${track.id}');
+            await track.stop();
+          }
         }
+      } catch (e) {
+        logger.d('hangup: getReceivers/stop failed (PC may be disposed): $e');
       }
     } else {
       logger.d("peerConnection is null, can't stop tracks.");
