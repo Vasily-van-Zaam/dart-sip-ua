@@ -612,6 +612,10 @@ class Call {
     } else {
       logger.d("peerConnection is null, can't stop tracks.");
     }
+    if (_session.isEnded()) {
+      logger.d('hangup: session already ended, skipping terminate');
+      return;
+    }
     _session.terminate(options);
   }
 
