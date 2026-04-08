@@ -1436,23 +1436,27 @@ class RTCSession extends EventManager implements Owner {
         case SipMethod.BYE:
           if (_status == C.STATUS_CONFIRMED) {
             request.reply(200);
+            final reasonHeader =
+                request.hasHeader('Reason') ? '${request.getHeader('Reason')}' : null;
             _ended(
                 'remote',
                 request,
                 ErrorCause(
                     cause: DartSIP_C.CausesType.BYE,
                     status_code: 200,
-                    reason_phrase: 'BYE Received'));
+                    reason_phrase: reasonHeader ?? 'BYE Received'));
           } else if (_status == C.STATUS_INVITE_RECEIVED) {
             request.reply(200);
             _request.reply(487, 'BYE Received');
+            final reasonHeader =
+                request.hasHeader('Reason') ? '${request.getHeader('Reason')}' : null;
             _ended(
                 'remote',
                 request,
                 ErrorCause(
                     cause: DartSIP_C.CausesType.BYE,
                     status_code: request.status_code,
-                    reason_phrase: request.reason_phrase));
+                    reason_phrase: reasonHeader ?? request.reason_phrase));
           } else {
             request.reply(403);
           }
