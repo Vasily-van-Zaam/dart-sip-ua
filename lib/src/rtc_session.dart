@@ -1882,10 +1882,24 @@ class RTCSession extends EventManager implements Owner {
       pc.onIceGatheringState = null;
       _iceGatheringState = RTCIceGatheringState.RTCIceGatheringStateComplete;
       _rtcReady = true;
-      RTCSessionDescription? gathered = await pc.getLocalDescription();
+      RTCSessionDescription? gathered;
+      try {
+        gathered = await pc.getLocalDescription();
+      } catch (e) {
+        if (e.toString().contains('peerConnection is null')) {
+          if (!completer.isCompleted) {
+            completer.completeError(Exceptions.InvalidStateError(
+                'createLocalDescription() | peer connection disposed'));
+          }
+          return;
+        }
+        rethrow;
+      }
       if (gathered == null) {
-        completer.completeError(Exceptions.InvalidStateError(
-            'createLocalDescription() | missing local SDP'));
+        if (!completer.isCompleted) {
+          completer.completeError(Exceptions.InvalidStateError(
+              'createLocalDescription() | missing local SDP'));
+        }
         return;
       }
       logger.d('emit "sdp"');
@@ -1933,10 +1947,31 @@ class RTCSession extends EventManager implements Owner {
     if (_iceGatheringState ==
         RTCIceGatheringState.RTCIceGatheringStateComplete) {
       _rtcReady = true;
-      RTCSessionDescription? desc = await _connection!.getLocalDescription();
-      logger.d('emit "sdp"');
-      emit(EventSdp(originator: 'local', type: type, sdp: desc!.sdp));
-      return desc;
+      final RTCPeerConnection? pc = _connection;
+      if (pc == null) {
+        completer.completeError(Exceptions.InvalidStateError(
+            'createLocalDescription() | peer connection disposed'));
+        return completer.future;
+      }
+      try {
+        RTCSessionDescription? desc = await pc.getLocalDescription();
+        if (desc?.sdp == null) {
+          completer.completeError(Exceptions.InvalidStateError(
+              'createLocalDescription() | missing local SDP'));
+          return completer.future;
+        }
+        logger.d('emit "sdp"');
+        emit(EventSdp(originator: 'local', type: type, sdp: desc!.sdp));
+        return desc;
+      } catch (e) {
+        final msg = e.toString();
+        if (msg.contains('peerConnection is null')) {
+          completer.completeError(Exceptions.InvalidStateError(
+              'createLocalDescription() | peer connection disposed'));
+          return completer.future;
+        }
+        rethrow;
+      }
     }
 
     return completer.future;
@@ -2793,10 +2828,19 @@ class RTCSession extends EventManager implements Owner {
   Future<String?> _pollMangledOfferUntilIceNotPoison(Duration maxWait) async {
     final DateTime deadline = DateTime.now().add(maxWait);
     while (DateTime.now().isBefore(deadline)) {
-      if (_status == C.STATUS_TERMINATED || _connection == null) {
+      final RTCPeerConnection? pc = _connection;
+      if (_status == C.STATUS_TERMINATED || pc == null) {
         return null;
       }
-      final RTCSessionDescription? loc = await _connection!.getLocalDescription();
+      RTCSessionDescription? loc;
+      try {
+        loc = await pc.getLocalDescription();
+      } catch (e) {
+        if (e.toString().contains('peerConnection is null')) {
+          return null;
+        }
+        rethrow;
+      }
       if (loc?.sdp != null) {
         final String? mangled = _mangleOffer(loc!.sdp);
         if (mangled != null && !_isReinviteOfferSdpIcePoison(mangled)) {
