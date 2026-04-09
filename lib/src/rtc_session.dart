@@ -1839,21 +1839,39 @@ class RTCSession extends EventManager implements Owner {
     late RTCSessionDescription desc;
     if (type == 'offer') {
       try {
-        desc = await _connection!.createOffer(constraints);
+        final pc = _connection;
+        if (pc == null) {
+          _rtcReady = true;
+          completer.completeError(Exceptions.InvalidStateError(
+              'createLocalDescription() | peer connection disposed before createOffer'));
+          return completer.future;
+        }
+        desc = await pc.createOffer(constraints);
       } catch (error) {
         logger.e(
             'emit "peerconnection:createofferfailed" [error:${error.toString()}]');
         emit(EventCreateOfferFailed(exception: error));
-        completer.completeError(error);
+        if (!completer.isCompleted) {
+          completer.completeError(error);
+        }
       }
     } else {
       try {
-        desc = await _connection!.createAnswer(constraints);
+        final pc = _connection;
+        if (pc == null) {
+          _rtcReady = true;
+          completer.completeError(Exceptions.InvalidStateError(
+              'createLocalDescription() | peer connection disposed before createAnswer'));
+          return completer.future;
+        }
+        desc = await pc.createAnswer(constraints);
       } catch (error) {
         logger.e(
             'emit "peerconnection:createanswerfailed" [error:${error.toString()}]');
         emit(EventCreateAnswerFialed(exception: error));
-        completer.completeError(error);
+        if (!completer.isCompleted) {
+          completer.completeError(error);
+        }
       }
     }
 
@@ -1907,6 +1925,15 @@ class RTCSession extends EventManager implements Owner {
       completer.complete(gathered);
     }
 
+    if (_connection == null) {
+      _rtcReady = true;
+      if (!completer.isCompleted) {
+        completer.completeError(Exceptions.InvalidStateError(
+            'createLocalDescription() | peer connection disposed before ICE setup'));
+      }
+      return completer.future;
+    }
+
     _connection!.onIceGatheringState = (RTCIceGatheringState state) {
       _iceGatheringState = state;
       if (state == RTCIceGatheringState.RTCIceGatheringStateComplete) {
@@ -1934,13 +1961,33 @@ class RTCSession extends EventManager implements Owner {
     };
 
     try {
-      await _connection!.setLocalDescription(desc);
+      final pc = _connection;
+      if (pc == null) {
+        _rtcReady = true;
+        if (!completer.isCompleted) {
+          completer.completeError(Exceptions.InvalidStateError(
+              'createLocalDescription() | peer connection disposed before setLocalDescription'));
+        }
+        return completer.future;
+      }
+      await pc.setLocalDescription(desc);
     } catch (error) {
       _rtcReady = true;
+      final errStr = error.toString();
+      if (errStr.contains('peerConnection is null')) {
+        logger.w('setLocalDescription skipped: peerConnection already disposed');
+        if (!completer.isCompleted) {
+          completer.completeError(Exceptions.InvalidStateError(
+              'createLocalDescription() | peer connection disposed during setLocalDescription'));
+        }
+        return completer.future;
+      }
       logger.e(
-          'emit "peerconnection:setlocaldescriptionfailed" [error:${error.toString()}]');
+          'emit "peerconnection:setlocaldescriptionfailed" [error:$errStr]');
       emit(EventSetLocalDescriptionFailed(exception: error));
-      completer.completeError(error);
+      if (!completer.isCompleted) {
+        completer.completeError(error);
+      }
     }
 
     // Resolve right away if 'pc.iceGatheringState' is 'complete'.
@@ -2780,28 +2827,44 @@ class RTCSession extends EventManager implements Owner {
 
       // Be ready for 200 with SDP after a 180/183 with SDP.
       // We created a SDP 'answer' for it, so check the current signaling state.
-      if (_connection!.signalingState ==
-              RTCSignalingState.RTCSignalingStateStable ||
-          _connection!.signalingState ==
-              RTCSignalingState.RTCSignalingStateHaveLocalOffer) {
+      final RTCPeerConnection? pc200 = _connection;
+      if (pc200 != null &&
+          (pc200.signalingState ==
+                  RTCSignalingState.RTCSignalingStateStable ||
+              pc200.signalingState ==
+                  RTCSignalingState.RTCSignalingStateHaveLocalOffer)) {
         try {
           RTCSessionDescription offer =
-              await _connection!.createOffer(_rtcOfferConstraints!);
-          await _connection!.setLocalDescription(offer);
+              await pc200.createOffer(_rtcOfferConstraints!);
+          // Re-check: connection may have been disposed during async createOffer.
+          if (_connection == null) {
+            logger.w('peerConnection disposed between createOffer and setLocalDescription (200 OK handler)');
+          } else {
+            await _connection!.setLocalDescription(offer);
+          }
         } catch (error) {
-          _acceptAndTerminate(response, 500, error.toString());
-          _failed(
-              'local',
-              null,
-              null,
-              response,
-              500,
-              DartSIP_C.CausesType.WEBRTC_ERROR,
-              'Can\'t create offer ${error.toString()}');
+          final errStr = error.toString();
+          if (errStr.contains('peerConnection is null')) {
+            logger.w('setLocalDescription skipped in 200 OK handler: peerConnection already disposed');
+          } else {
+            _acceptAndTerminate(response, 500, errStr);
+            _failed(
+                'local',
+                null,
+                null,
+                response,
+                500,
+                DartSIP_C.CausesType.WEBRTC_ERROR,
+                'Can\'t create offer $errStr');
+          }
         }
       }
 
       try {
+        if (_connection == null) {
+          logger.w('peerConnection disposed before setRemoteDescription (200 OK handler)');
+          return;
+        }
         await _connection!.setRemoteDescription(answer);
         // Handle Session Timers.
         _handleSessionTimersInIncomingResponse(response);
@@ -2809,11 +2872,16 @@ class RTCSession extends EventManager implements Owner {
         OutgoingRequest ack = sendRequest(SipMethod.ACK);
         _confirmed('local', ack);
       } catch (error) {
+        final errStr = error.toString();
+        if (errStr.contains('peerConnection is null')) {
+          logger.w('setRemoteDescription skipped in 200 OK handler: peerConnection already disposed');
+          return;
+        }
         _acceptAndTerminate(response, 488, 'Not Acceptable Here');
         _failed('remote', null, null, response, 488,
             DartSIP_C.CausesType.BAD_MEDIA_DESCRIPTION, 'Not Acceptable Here');
         logger.e(
-            'emit "peerconnection:setremotedescriptionfailed" [error:${error.toString()}]');
+            'emit "peerconnection:setremotedescriptionfailed" [error:$errStr]');
         emit(EventSetRemoteDescriptionFailed(exception: error));
       }
     } else {
