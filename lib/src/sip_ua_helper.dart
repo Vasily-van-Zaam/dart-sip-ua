@@ -200,6 +200,11 @@ class SIPUAHelper extends EventManager {
         uaSettings.transportOptionsProbeMaxAttempts;
     _settings.transport_options_probe_target =
         uaSettings.transportOptionsProbeTarget;
+    _settings.call_keep_alive_enabled = uaSettings.callKeepAliveEnabled;
+    _settings.call_keep_alive_interval_sec =
+        uaSettings.callKeepAliveIntervalSec;
+    _settings.call_keep_alive_max_attempts =
+        uaSettings.callKeepAliveMaxAttempts;
     _settings.terminateOnAudioMediaPortZero =
         uaSettings.terminateOnMediaPortZero;
 
@@ -977,6 +982,17 @@ class UaSettings {
 
   /// Optional explicit OPTIONS target (fallback: account URI).
   String? transportOptionsProbeTarget;
+
+  /// Enable in-call keepalive OPTIONS to detect dead transport during calls.
+  bool callKeepAliveEnabled = true;
+
+  /// Interval in seconds between keepalive checks during active calls.
+  int callKeepAliveIntervalSec = 10;
+
+  /// Max consecutive keepalive intervals with no incoming data before
+  /// the transport is force-closed. With interval=10 and maxAttempts=3,
+  /// the call survives up to ~30s of silence.
+  int callKeepAliveMaxAttempts = 3;
   List<Map<String, String>> iceServers = <Map<String, String>>[
     <String, String>{'urls': 'stun:stun.l.google.com:19302'},
 // turn server configuration example.

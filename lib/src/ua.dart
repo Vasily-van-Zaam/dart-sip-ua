@@ -168,6 +168,10 @@ class UA extends EventManager {
   Options? _transportOptionsProbeInFlight;
   SIPUASocketInterface? _transportOptionsProbeSocket;
   int _transportOptionsProbeAttempt = 0;
+  Timer? _callKeepAliveTimer;
+  Timer? _callKeepAliveResponseTimer;
+  Options? _callKeepAliveInFlight;
+  int _callKeepAliveAttempt = 0;
   Timer? _postReconnectRegisterTimer;
   bool _pendingPostReconnectRegister = false;
 
@@ -345,6 +349,7 @@ class UA extends EventManager {
   void stop() {
     logger.d('stop()');
     _stopTransportOptionsProbe();
+    _stopCallKeepAlive();
     _cancelPostReconnectRegisterTimer();
 
     // Keep dynamic settings object to avoid null deref on late transport callbacks.
@@ -588,6 +593,7 @@ class UA extends EventManager {
     _sessions[session.id] = session;
     emit(EventNewRTCSession(
         session: session, originator: originator, request: request));
+    _startCallKeepAlive();
   }
 
   /**
@@ -595,6 +601,9 @@ class UA extends EventManager {
    */
   void destroyRTCSession(RTCSession session) {
     _sessions.remove(session.id);
+    if (activeSessionCount == 0) {
+      _stopCallKeepAlive();
+    }
   }
 
   /**
@@ -1054,6 +1063,7 @@ class UA extends EventManager {
 // Transport disconnected event.
   void onTransportDisconnect(SIPUASocketInterface? socket, ErrorCause cause) {
     _stopTransportOptionsProbe();
+    _stopCallKeepAlive();
     _cancelPostReconnectRegisterTimer();
     if (_status != C.STATUS_USER_CLOSED) {
       _pendingPostReconnectRegister = true;
@@ -1140,6 +1150,167 @@ class UA extends EventManager {
       logger.e('onTransportData crash: $e', error: e, stackTrace: s);
     }
   }
+
+  // ── In-call keepalive via SIP OPTIONS ──────────────────────────────
+
+  void _startCallKeepAlive() {
+    if (!_configuration.call_keep_alive_enabled) {
+      return;
+    }
+    if (_callKeepAliveTimer != null) {
+      // Already running.
+      return;
+    }
+    _callKeepAliveAttempt = 0;
+    final int intervalSec = _configuration.call_keep_alive_interval_sec > 0
+        ? _configuration.call_keep_alive_interval_sec
+        : 10;
+    _callKeepAliveTimer =
+        Timer.periodic(Duration(seconds: intervalSec), (_) {
+      _checkCallKeepAlive();
+    });
+    logger.d('Call keepalive started (interval=${intervalSec}s)');
+  }
+
+  void _stopCallKeepAlive() {
+    _callKeepAliveTimer?.cancel();
+    _callKeepAliveTimer = null;
+    _callKeepAliveResponseTimer?.cancel();
+    _callKeepAliveResponseTimer = null;
+    try {
+      _callKeepAliveInFlight?.close();
+    } catch (_) {}
+    _callKeepAliveInFlight = null;
+    _callKeepAliveAttempt = 0;
+  }
+
+  void _checkCallKeepAlive() {
+    if (_status != C.STATUS_READY) {
+      return;
+    }
+    if (activeSessionCount == 0) {
+      _stopCallKeepAlive();
+      return;
+    }
+    if (_socketTransport == null || !_socketTransport!.isConnected()) {
+      return;
+    }
+    if (_callKeepAliveInFlight != null) {
+      // Previous probe still in flight — wait for its result.
+      return;
+    }
+
+    final int intervalSec = _configuration.call_keep_alive_interval_sec > 0
+        ? _configuration.call_keep_alive_interval_sec
+        : 10;
+    final int idleFor =
+        DateTime.now().difference(_lastTransportActivityAt).inSeconds;
+
+    if (idleFor < intervalSec) {
+      // Got incoming data recently — transport is alive.
+      _callKeepAliveAttempt = 0;
+      return;
+    }
+
+    // No incoming data for a full interval — send OPTIONS probe.
+    _sendCallKeepAlive();
+  }
+
+  void _sendCallKeepAlive() {
+    final int maxAttempts = _configuration.call_keep_alive_max_attempts > 0
+        ? _configuration.call_keep_alive_max_attempts
+        : 3;
+
+    if (_callKeepAliveAttempt >= maxAttempts) {
+      logger.w(
+          'Call keepalive failed $_callKeepAliveAttempt/$maxAttempts — '
+          'force-closing transport.');
+      _stopCallKeepAlive();
+      _socketTransport?.disconnect();
+      return;
+    }
+
+    _callKeepAliveAttempt += 1;
+    final int attempt = _callKeepAliveAttempt;
+
+    final EventManager handlers = EventManager();
+    handlers.on(EventSucceeded(), (EventSucceeded _) {
+      _onCallKeepAliveSuccess();
+    });
+    handlers.on(EventCallFailed(), (EventCallFailed _) {
+      _onCallKeepAliveFailure();
+    });
+
+    try {
+      logger.d(
+          'Call keepalive OPTIONS attempt $attempt/$maxAttempts');
+      _callKeepAliveInFlight = sendOptions(
+        _transportOptionsProbeTarget(),
+        'ping',
+        <String, dynamic>{
+          'eventHandlers': handlers,
+          'contentType': 'text/plain',
+        },
+      );
+      _startCallKeepAliveResponseTimer();
+    } catch (e) {
+      logger.w('Call keepalive OPTIONS send failed: $e');
+      _callKeepAliveInFlight = null;
+      // Don't count send failures as attempts — transport may already be gone.
+    }
+  }
+
+  void _startCallKeepAliveResponseTimer() {
+    _callKeepAliveResponseTimer?.cancel();
+    final int intervalSec = _configuration.call_keep_alive_interval_sec > 0
+        ? _configuration.call_keep_alive_interval_sec
+        : 10;
+    _callKeepAliveResponseTimer =
+        Timer(Duration(seconds: intervalSec), () {
+      logger.w('Call keepalive OPTIONS response timeout after ${intervalSec}s');
+      try {
+        _callKeepAliveInFlight?.close();
+      } catch (_) {}
+      _callKeepAliveInFlight = null;
+      _onCallKeepAliveFailure();
+    });
+  }
+
+  void _onCallKeepAliveSuccess() {
+    _callKeepAliveResponseTimer?.cancel();
+    _callKeepAliveResponseTimer = null;
+    _callKeepAliveInFlight = null;
+    _callKeepAliveAttempt = 0;
+    _lastTransportActivityAt = DateTime.now();
+    logger.d('Call keepalive OPTIONS succeeded');
+  }
+
+  void _onCallKeepAliveFailure() {
+    _callKeepAliveResponseTimer?.cancel();
+    _callKeepAliveResponseTimer = null;
+    try {
+      _callKeepAliveInFlight?.close();
+    } catch (_) {}
+    _callKeepAliveInFlight = null;
+
+    final int maxAttempts = _configuration.call_keep_alive_max_attempts > 0
+        ? _configuration.call_keep_alive_max_attempts
+        : 3;
+
+    if (_callKeepAliveAttempt >= maxAttempts) {
+      logger.w(
+          'Call keepalive failed $_callKeepAliveAttempt/$maxAttempts — '
+          'force-closing transport.');
+      _stopCallKeepAlive();
+      _socketTransport?.disconnect();
+      return;
+    }
+
+    // Retry immediately.
+    _sendCallKeepAlive();
+  }
+
+  // ── Idle transport OPTIONS probe ─────────────────────────────────
 
   bool _isTransportOptionsProbeEnabled() {
     return _configuration.transport_options_probe_enabled;

@@ -83,6 +83,11 @@ class Settings {
   int transport_options_probe_max_attempts = 2;
   String? transport_options_probe_target;
 
+  /// In-call keepalive: send OPTIONS during active calls to detect dead transport.
+  bool call_keep_alive_enabled = true;
+  int call_keep_alive_interval_sec = 10;
+  int call_keep_alive_max_attempts = 3;
+
   /// When true (default), advertise ICE in SIP: `Supported: ...ice...` and
   /// `;+sip.ice` on REGISTER Contact (RFC 5768). Set false if the PBX must not
   /// treat the UA as ICE-capable (SDP may still contain ICE lines from WebRTC).
@@ -313,6 +318,21 @@ class Checks {
       final String? value = src.transport_options_probe_target;
       if (value == null || value.trim().isEmpty) return;
       dst!.transport_options_probe_target = value.trim();
+    },
+    'call_keep_alive_enabled': (Settings src, Settings? dst) {
+      dst!.call_keep_alive_enabled = src.call_keep_alive_enabled;
+    },
+    'call_keep_alive_interval_sec': (Settings src, Settings? dst) {
+      final int value = src.call_keep_alive_interval_sec;
+      if (value > 0) {
+        dst!.call_keep_alive_interval_sec = value;
+      }
+    },
+    'call_keep_alive_max_attempts': (Settings src, Settings? dst) {
+      final int value = src.call_keep_alive_max_attempts;
+      if (value > 0) {
+        dst!.call_keep_alive_max_attempts = value;
+      }
     }
   };
 }
