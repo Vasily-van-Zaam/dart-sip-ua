@@ -1365,11 +1365,8 @@ class UA extends EventManager {
     if (_status != C.STATUS_READY) {
       return;
     }
-    // Never run idle/liveness OPTIONS while a call session is active: a slow STUN,
-    // main-thread jank, or temporary lack of in-dialog traffic can make the probe
-    // time out and force disconnectWithRecovery(), killing signaling mid-call.
+    // Don't run idle probe while a call is active — call keepalive handles that.
     if (activeSessionCount > 0) {
-      _lastTransportActivityAt = DateTime.now();
       return;
     }
     if (_socketTransport == null || !_socketTransport!.isConnected()) {
