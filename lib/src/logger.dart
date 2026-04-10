@@ -23,6 +23,8 @@ class Log extends Logger {
   static late String _localPath;
   static bool _loggingEnabled = true;
   static Level _loggingLevel = Level.debug;
+  static LogFilter _loggLogFilter = DevelopmentFilter();
+  static set loggLogFilter(LogFilter filter) => _loggLogFilter = filter;
   static set loggingEnabled(bool enabled) => _loggingEnabled = enabled;
   static set loggingLevel(Level loggingLevel) => _loggingLevel = loggingLevel;
 }
