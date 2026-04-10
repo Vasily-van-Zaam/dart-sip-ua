@@ -1089,6 +1089,7 @@ class UA extends EventManager {
   void onTransportData(SocketTransport transport, String messageData) {
     try {
       _lastTransportActivityAt = DateTime.now();
+      _restartCallKeepAliveTimer();
       IncomingMessage? message = Parser.parseMessage(messageData, this);
 
       if (message == null) {
@@ -1173,6 +1174,23 @@ class UA extends EventManager {
     logger.d('Call keepalive started (interval=${intervalSec}s)');
   }
 
+  /// Restart the keepalive timer so the next probe fires a full interval
+  /// after the most recent incoming data.  Called from onTransportData().
+  void _restartCallKeepAliveTimer() {
+    if (_callKeepAliveTimer == null) {
+      return; // keepalive not running
+    }
+    _callKeepAliveAttempt = 0;
+    _callKeepAliveTimer!.cancel();
+    final int intervalSec = _configuration.call_keep_alive_interval_sec > 0
+        ? _configuration.call_keep_alive_interval_sec
+        : 10;
+    _callKeepAliveTimer =
+        Timer.periodic(Duration(seconds: intervalSec), (_) {
+      _checkCallKeepAlive();
+    });
+  }
+
   void _stopCallKeepAlive() {
     _callKeepAliveTimer?.cancel();
     _callKeepAliveTimer = null;
@@ -1195,19 +1213,8 @@ class UA extends EventManager {
       return;
     }
 
-    final int intervalSec = _configuration.call_keep_alive_interval_sec > 0
-        ? _configuration.call_keep_alive_interval_sec
-        : 10;
-    final int idleFor =
-        DateTime.now().difference(_lastTransportActivityAt).inSeconds;
-
-    if (idleFor < intervalSec) {
-      // Got incoming data recently — transport is alive.
-      _callKeepAliveAttempt = 0;
-      return;
-    }
-
-    // No incoming data for a full interval — send OPTIONS probe.
+    // Timer is restarted on every incoming message (onTransportData),
+    // so if we got here — a full interval passed with no incoming data.
     _sendCallKeepAlive();
   }
 
@@ -1276,8 +1283,8 @@ class UA extends EventManager {
     _callKeepAliveResponseTimer?.cancel();
     _callKeepAliveResponseTimer = null;
     _callKeepAliveInFlight = null;
-    _callKeepAliveAttempt = 0;
-    _lastTransportActivityAt = DateTime.now();
+    // attempt counter and timer are reset by _restartCallKeepAliveTimer()
+    // called from onTransportData() when the 200 OK arrives.
     logger.d('Call keepalive OPTIONS succeeded');
   }
 
