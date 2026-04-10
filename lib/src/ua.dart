@@ -1063,7 +1063,8 @@ class UA extends EventManager {
 // Transport disconnected event.
   void onTransportDisconnect(SIPUASocketInterface? socket, ErrorCause cause) {
     _stopTransportOptionsProbe();
-    _stopCallKeepAlive();
+    // Don't stop call keepalive here — let it exhaust all attempts so the
+    // transport has a chance to recover before we force-close.
     _cancelPostReconnectRegisterTimer();
     if (_status != C.STATUS_USER_CLOSED) {
       _pendingPostReconnectRegister = true;
@@ -1185,14 +1186,8 @@ class UA extends EventManager {
   }
 
   void _checkCallKeepAlive() {
-    if (_status != C.STATUS_READY) {
-      return;
-    }
     if (activeSessionCount == 0) {
       _stopCallKeepAlive();
-      return;
-    }
-    if (_socketTransport == null || !_socketTransport!.isConnected()) {
       return;
     }
     if (_callKeepAliveInFlight != null) {
@@ -1256,7 +1251,8 @@ class UA extends EventManager {
     } catch (e) {
       logger.w('Call keepalive OPTIONS send failed: $e');
       _callKeepAliveInFlight = null;
-      // Don't count send failures as attempts — transport may already be gone.
+      // Don't retry immediately — let the next periodic tick handle it
+      // via _checkCallKeepAlive() so transport has time to recover.
     }
   }
 
