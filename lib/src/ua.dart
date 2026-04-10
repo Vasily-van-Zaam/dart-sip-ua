@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:logger/logger.dart' show Logger;
 import 'package:sip_ua/src/transport_type.dart';
 import 'package:sip_ua/src/transports/socket_interface.dart';
 import 'config.dart' as config;
@@ -105,7 +106,8 @@ class Contact {
  * @throws {TypeError} If no configuration is given.
  */
 class UA extends EventManager {
-  UA(Settings configuration) {
+  UA(Settings configuration, {Logger? log}) {
+    logger = log ?? Log();
     logger.d('new() [configuration:${configuration.toString()}]');
     // Load configuration.
     try {
@@ -988,12 +990,12 @@ class UA extends EventManager {
 // Transport connecting event.
   void onTransportConnecting(SIPUASocketInterface? socket, int? attempts) {
     logger.d('Transport connecting (recoveryAttempt: ${attempts ?? 0})');
-    emit(EventSocketConnecting(
-        socket: socket, recoveryAttempt: attempts ?? 0));
+    emit(EventSocketConnecting(socket: socket, recoveryAttempt: attempts ?? 0));
   }
 
   void onTransportReconnectScheduled(int attempt, int delaySeconds) {
-    logger.d('Transport reconnect scheduled in ${delaySeconds}s (attempt $attempt)');
+    logger.d(
+        'Transport reconnect scheduled in ${delaySeconds}s (attempt $attempt)');
     emit(EventSocketReconnectScheduled(
         attempt: attempt, delaySeconds: delaySeconds));
   }
@@ -1043,8 +1045,7 @@ class UA extends EventManager {
           if (_status == C.STATUS_USER_CLOSED) {
             return;
           }
-          if (_socketTransport != null &&
-              !_socketTransport!.isConnected()) {
+          if (_socketTransport != null && !_socketTransport!.isConnected()) {
             logger.d(
                 'register() after reconnect delay skipped: transport not connected');
             return;
@@ -1140,8 +1141,9 @@ class UA extends EventManager {
             // Just in case ;-).
             break;
           default:
-            NonInviteClientTransaction? transaction = _transactions
-                .getTransaction(NonInviteClientTransaction, message.via_branch!);
+            NonInviteClientTransaction? transaction =
+                _transactions.getTransaction(
+                    NonInviteClientTransaction, message.via_branch!);
             if (transaction != null) {
               transaction.receiveResponse(message.status_code, message);
             }
@@ -1167,8 +1169,7 @@ class UA extends EventManager {
     final int intervalSec = _configuration.call_keep_alive_interval_sec > 0
         ? _configuration.call_keep_alive_interval_sec
         : 10;
-    _callKeepAliveTimer =
-        Timer.periodic(Duration(seconds: intervalSec), (_) {
+    _callKeepAliveTimer = Timer.periodic(Duration(seconds: intervalSec), (_) {
       _checkCallKeepAlive();
     });
     logger.d('Call keepalive started (interval=${intervalSec}s)');
@@ -1185,8 +1186,7 @@ class UA extends EventManager {
     final int intervalSec = _configuration.call_keep_alive_interval_sec > 0
         ? _configuration.call_keep_alive_interval_sec
         : 10;
-    _callKeepAliveTimer =
-        Timer.periodic(Duration(seconds: intervalSec), (_) {
+    _callKeepAliveTimer = Timer.periodic(Duration(seconds: intervalSec), (_) {
       _checkCallKeepAlive();
     });
   }
@@ -1224,8 +1224,7 @@ class UA extends EventManager {
         : 3;
 
     if (_callKeepAliveAttempt >= maxAttempts) {
-      logger.w(
-          'Call keepalive failed $_callKeepAliveAttempt/$maxAttempts — '
+      logger.w('Call keepalive failed $_callKeepAliveAttempt/$maxAttempts — '
           'force-closing transport.');
       _stopCallKeepAlive();
       _socketTransport?.disconnect();
@@ -1245,8 +1244,7 @@ class UA extends EventManager {
 
     try {
       // Escalate to warning so it is visible even when release logs filter out debug.
-      logger.w(
-          'Call keepalive OPTIONS attempt $attempt/$maxAttempts');
+      logger.w('Call keepalive OPTIONS attempt $attempt/$maxAttempts');
       _callKeepAliveInFlight = sendOptions(
         _transportOptionsProbeTarget(),
         'ping',
@@ -1272,8 +1270,7 @@ class UA extends EventManager {
             : (_configuration.call_keep_alive_interval_sec > 0
                 ? _configuration.call_keep_alive_interval_sec
                 : 10);
-    _callKeepAliveResponseTimer =
-        Timer(Duration(seconds: timeoutSec), () {
+    _callKeepAliveResponseTimer = Timer(Duration(seconds: timeoutSec), () {
       logger.w('Call keepalive OPTIONS response timeout after ${timeoutSec}s');
       try {
         _callKeepAliveInFlight?.close();
@@ -1305,8 +1302,7 @@ class UA extends EventManager {
         : 3;
 
     if (_callKeepAliveAttempt >= maxAttempts) {
-      logger.w(
-          'Call keepalive failed $_callKeepAliveAttempt/$maxAttempts — '
+      logger.w('Call keepalive failed $_callKeepAliveAttempt/$maxAttempts — '
           'force-closing transport.');
       _stopCallKeepAlive();
       _socketTransport?.disconnect();
@@ -1397,9 +1393,10 @@ class UA extends EventManager {
     if (_transportOptionsProbeInFlight != null) {
       return;
     }
-    final int maxAttempts = _configuration.transport_options_probe_max_attempts > 0
-        ? _configuration.transport_options_probe_max_attempts
-        : 2;
+    final int maxAttempts =
+        _configuration.transport_options_probe_max_attempts > 0
+            ? _configuration.transport_options_probe_max_attempts
+            : 2;
     if (_transportOptionsProbeAttempt >= maxAttempts) {
       logger.w(
           'Transport OPTIONS probe failed ${_transportOptionsProbeAttempt}/$maxAttempts. Disconnecting transport with recovery.');
@@ -1482,9 +1479,10 @@ class UA extends EventManager {
     _transportOptionsProbeInFlight = null;
     _transportOptionsProbeSocket = null;
 
-    final int maxAttempts = _configuration.transport_options_probe_max_attempts > 0
-        ? _configuration.transport_options_probe_max_attempts
-        : 2;
+    final int maxAttempts =
+        _configuration.transport_options_probe_max_attempts > 0
+            ? _configuration.transport_options_probe_max_attempts
+            : 2;
     if (_transportOptionsProbeAttempt >= maxAttempts) {
       logger.w(
           'OPTIONS probe failed ${_transportOptionsProbeAttempt}/$maxAttempts. Marking transport as lost and scheduling recovery.');
