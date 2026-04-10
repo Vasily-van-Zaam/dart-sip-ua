@@ -203,6 +203,8 @@ class SIPUAHelper extends EventManager {
     _settings.call_keep_alive_enabled = uaSettings.callKeepAliveEnabled;
     _settings.call_keep_alive_interval_sec =
         uaSettings.callKeepAliveIntervalSec;
+    _settings.call_keep_alive_response_timeout_sec =
+        uaSettings.callKeepAliveResponseTimeoutSec;
     _settings.call_keep_alive_max_attempts =
         uaSettings.callKeepAliveMaxAttempts;
     _settings.terminateOnAudioMediaPortZero =
@@ -988,6 +990,10 @@ class UaSettings {
 
   /// Interval in seconds between keepalive checks during active calls.
   int callKeepAliveIntervalSec = 10;
+
+  /// Wait timeout for each keepalive OPTIONS response.
+  /// If <= 0, timeout falls back to [callKeepAliveIntervalSec].
+  int callKeepAliveResponseTimeoutSec = -1;
 
   /// Max consecutive keepalive intervals with no incoming data before
   /// the transport is force-closed. With interval=10 and maxAttempts=3,

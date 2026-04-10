@@ -1244,7 +1244,8 @@ class UA extends EventManager {
     });
 
     try {
-      logger.d(
+      // Escalate to warning so it is visible even when release logs filter out debug.
+      logger.w(
           'Call keepalive OPTIONS attempt $attempt/$maxAttempts');
       _callKeepAliveInFlight = sendOptions(
         _transportOptionsProbeTarget(),
@@ -1265,12 +1266,15 @@ class UA extends EventManager {
 
   void _startCallKeepAliveResponseTimer() {
     _callKeepAliveResponseTimer?.cancel();
-    final int intervalSec = _configuration.call_keep_alive_interval_sec > 0
-        ? _configuration.call_keep_alive_interval_sec
-        : 10;
+    final int timeoutSec =
+        _configuration.call_keep_alive_response_timeout_sec > 0
+            ? _configuration.call_keep_alive_response_timeout_sec
+            : (_configuration.call_keep_alive_interval_sec > 0
+                ? _configuration.call_keep_alive_interval_sec
+                : 10);
     _callKeepAliveResponseTimer =
-        Timer(Duration(seconds: intervalSec), () {
-      logger.w('Call keepalive OPTIONS response timeout after ${intervalSec}s');
+        Timer(Duration(seconds: timeoutSec), () {
+      logger.w('Call keepalive OPTIONS response timeout after ${timeoutSec}s');
       try {
         _callKeepAliveInFlight?.close();
       } catch (_) {}

@@ -86,6 +86,9 @@ class Settings {
   /// In-call keepalive: send OPTIONS during active calls to detect dead transport.
   bool call_keep_alive_enabled = true;
   int call_keep_alive_interval_sec = 10;
+  /// Response timeout for each in-call keepalive OPTIONS probe.
+  /// If <= 0, the timeout falls back to `call_keep_alive_interval_sec`.
+  int call_keep_alive_response_timeout_sec = -1;
   int call_keep_alive_max_attempts = 3;
 
   /// When true (default), advertise ICE in SIP: `Supported: ...ice...` and
@@ -326,6 +329,12 @@ class Checks {
       final int value = src.call_keep_alive_interval_sec;
       if (value > 0) {
         dst!.call_keep_alive_interval_sec = value;
+      }
+    },
+    'call_keep_alive_response_timeout_sec': (Settings src, Settings? dst) {
+      final int value = src.call_keep_alive_response_timeout_sec;
+      if (value > 0) {
+        dst!.call_keep_alive_response_timeout_sec = value;
       }
     },
     'call_keep_alive_max_attempts': (Settings src, Settings? dst) {
