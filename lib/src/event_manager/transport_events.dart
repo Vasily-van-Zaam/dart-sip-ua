@@ -27,3 +27,9 @@ class EventSocketReconnectScheduled extends EventType {
   int attempt;
   int delaySeconds;
 }
+
+/// Emitted when max reconnection attempts are exhausted.
+class EventSocketReconnectFailed extends EventType {
+  EventSocketReconnectFailed({this.attempts = 0});
+  int attempts;
+}

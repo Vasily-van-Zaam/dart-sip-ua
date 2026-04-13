@@ -49,12 +49,16 @@ class SocketTransport {
   final List<Map<String, dynamic>> _socketsMap = <Map<String, dynamic>>[];
   late Map<String, int> _recovery_options;
   int _recover_attempts = 0;
+  int get recoverAttempts => _recover_attempts;
   Timer? _recovery_timer;
   bool _close_requested = false;
   bool _desyncRecoveryScheduled = false;
 
   /// Fired when automatic reconnect backoff is scheduled (not for user [disconnect]).
   void Function(int attempt, int delaySeconds)? onReconnectScheduled;
+
+  /// Fired when max reconnection attempts exhausted.
+  void Function()? onReconnectFailed;
 
   late void Function(SIPUASocketInterface? socket, int? attempts) onconnecting;
   late void Function(SIPUASocketInterface? socket, ErrorCause cause)
@@ -147,8 +151,13 @@ class SocketTransport {
 
       return false;
     }
-    String message = data.toString();
-    return socket.send(message);
+    try {
+      String message = data.toString();
+      return socket.send(message);
+    } catch (e) {
+      logger.e('send() failed: $e');
+      return false;
+    }
   }
 
   /// The stack historically treated [status] as the only source of truth, but the
@@ -193,6 +202,13 @@ class SocketTransport {
   void _reconnect(bool error) {
     _recover_attempts = _recover_attempts + 1;
 
+    final int maxAttempts = _recovery_options['max_attempts'] ?? 0;
+    if (maxAttempts > 0 && _recover_attempts > maxAttempts) {
+      logger.w('Max reconnection attempts ($maxAttempts) exhausted, giving up');
+      onReconnectFailed?.call();
+      return;
+    }
+
     num k = ((Math.randomDouble() * pow(2, _recover_attempts)) + 1).floor();
 
     if (k < _recovery_options['min_interval']!) {
@@ -205,6 +221,7 @@ class SocketTransport {
         'reconnection attempt: $_recover_attempts. next connection attempt in $k seconds');
 
     final int delaySecs = k is int ? k : k.toInt();
+    logger.d('Transport reconnect scheduled in ${delaySecs}s (attempt $_recover_attempts)');
     onReconnectScheduled?.call(_recover_attempts, delaySecs);
 
     _recovery_timer = setTimeout(() {

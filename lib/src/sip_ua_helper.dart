@@ -188,6 +188,8 @@ class SIPUAHelper extends EventManager {
         uaSettings.connectionRecoveryMaxInterval;
     _settings.connection_recovery_min_interval =
         uaSettings.connectionRecoveryMinInterval;
+    _settings.connection_recovery_max_attempts =
+        uaSettings.connectionRecoveryMaxAttempts;
     _settings.post_reconnect_register_delay_ms =
         uaSettings.postReconnectRegisterDelayMs;
     _settings.transport_options_probe_enabled =
@@ -785,6 +787,8 @@ enum TransportStateEnum {
   DISCONNECTED,
   /// Backoff running after [DISCONNECTED]; next state is usually [CONNECTING].
   RECONNECT_SCHEDULED,
+  /// Max reconnection attempts exhausted. App should logout / show error.
+  RECONNECT_FAILED,
 }
 
 class TransportState {
@@ -960,6 +964,9 @@ class UaSettings {
 
   /// Min interval between recovery connection, default 2 sec
   int connectionRecoveryMinInterval = 2;
+
+  /// Max reconnection attempts before giving up (0 = unlimited, default 0)
+  int connectionRecoveryMaxAttempts = 0;
 
   /// Delay REGISTER after transport reconnect (not first connect). Helps PBXs
   /// that still assume the previous session is up for a short time.

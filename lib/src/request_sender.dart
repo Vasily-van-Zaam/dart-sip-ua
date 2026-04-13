@@ -9,6 +9,7 @@ import 'transactions/ack_client.dart';
 import 'transactions/invite_client.dart';
 import 'transactions/non_invite_client.dart';
 import 'transactions/transaction_base.dart';
+import 'socket_transport.dart';
 import 'ua.dart' as UAC;
 import 'ua.dart';
 
@@ -44,6 +45,12 @@ class RequestSender {
   * Create the client transaction and send the message.
   */
   void send() {
+    final SocketTransport? transport = _ua.socketTransport;
+    if (transport == null) {
+      _eventHandlers.emit(EventOnTransportError());
+      return;
+    }
+
     EventManager handlers = EventManager();
     handlers.on(EventOnRequestTimeout(), (EventOnRequestTimeout event) {
       _eventHandlers.emit(event);
@@ -61,15 +68,15 @@ class RequestSender {
     switch (_method) {
       case SipMethod.INVITE:
         clientTransaction = InviteClientTransaction(
-            _ua, _ua.socketTransport!, _request!, handlers);
+            _ua, transport, _request!, handlers);
         break;
       case SipMethod.ACK:
         clientTransaction = AckClientTransaction(
-            _ua, _ua.socketTransport!, _request!, handlers);
+            _ua, transport, _request!, handlers);
         break;
       default:
         clientTransaction = NonInviteClientTransaction(
-            _ua, _ua.socketTransport!, _request!, handlers);
+            _ua, transport, _request!, handlers);
     }
 
     clientTransaction?.send();

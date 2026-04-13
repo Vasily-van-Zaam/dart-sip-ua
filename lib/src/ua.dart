@@ -903,7 +903,8 @@ class UA extends EventManager {
       _socketTransport = SocketTransport(_configuration.sockets!, <String, int>{
         // Recovery options.
         'max_interval': _configuration.connection_recovery_max_interval,
-        'min_interval': _configuration.connection_recovery_min_interval
+        'min_interval': _configuration.connection_recovery_min_interval,
+        'max_attempts': _configuration.connection_recovery_max_attempts,
       });
 
       // Transport event callbacks.
@@ -912,6 +913,9 @@ class UA extends EventManager {
       _socketTransport!.ondisconnect = onTransportDisconnect;
       _socketTransport!.ondata = onTransportData;
       _socketTransport!.onReconnectScheduled = onTransportReconnectScheduled;
+      _socketTransport!.onReconnectFailed = () {
+        onTransportReconnectFailed(_socketTransport?.recoverAttempts ?? 0);
+      };
     } catch (e) {
       logger.e('Failed to _loadConfig: ${e.toString()}');
       throw Exceptions.ConfigurationError('sockets', _configuration.sockets);
@@ -998,6 +1002,11 @@ class UA extends EventManager {
         'Transport reconnect scheduled in ${delaySeconds}s (attempt $attempt)');
     emit(EventSocketReconnectScheduled(
         attempt: attempt, delaySeconds: delaySeconds));
+  }
+
+  void onTransportReconnectFailed(int attempts) {
+    logger.w('Transport reconnect failed after $attempts attempts');
+    emit(EventSocketReconnectFailed(attempts: attempts));
   }
 
 // Transport connected event.

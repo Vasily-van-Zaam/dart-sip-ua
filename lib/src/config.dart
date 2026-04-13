@@ -51,6 +51,9 @@ class Settings {
   int connection_recovery_max_interval = 30;
   int connection_recovery_min_interval = 2;
 
+  /// Maximum number of reconnection attempts before giving up (0 = unlimited).
+  int connection_recovery_max_attempts = 0;
+
   /// After an involuntary transport drop, wait this many milliseconds before
   /// sending REGISTER on the new socket. Some registrars (e.g. FreeSWITCH) may
   /// still treat the old WSS session as valid briefly; an immediate re-REGISTER

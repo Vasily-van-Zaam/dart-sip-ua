@@ -14,6 +14,7 @@ class C {
   // Recovery options.
   static const Map<String, int> recovery_options = <String, int>{
     'min_interval': 2, // minimum interval in seconds between recover attempts
-    'max_interval': 30 // maximum interval in seconds between recover attempts
+    'max_interval': 30, // maximum interval in seconds between recover attempts
+    'max_attempts': 0, // 0 = unlimited reconnection attempts
   };
 }
