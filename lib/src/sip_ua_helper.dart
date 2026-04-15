@@ -211,6 +211,8 @@ class SIPUAHelper extends EventManager {
         uaSettings.callKeepAliveMaxAttempts;
     _settings.terminateOnAudioMediaPortZero =
         uaSettings.terminateOnMediaPortZero;
+    _settings.post_ack_reinvite_enabled =
+        uaSettings.postAckReinviteEnabled;
 
     try {
       _ua = UA(_settings);
@@ -993,6 +995,11 @@ class UaSettings {
   String? transportOptionsProbeTarget;
 
   /// Enable in-call keepalive OPTIONS to detect dead transport during calls.
+  /// Send re-INVITE after ACK when incoming offer was legacy RTP/AVP
+  /// (no DTLS/ICE). Fixes silent media with some PBXs but may break
+  /// bridged external calls on FreeSWITCH.
+  bool postAckReinviteEnabled = true;
+
   bool callKeepAliveEnabled = true;
 
   /// Interval in seconds between keepalive checks during active calls.

@@ -76,6 +76,8 @@ class Settings {
 
   bool terminateOnAudioMediaPortZero = false;
 
+  bool post_ack_reinvite_enabled = true;
+
   /// Sip Message Delay (in millisecond) ( default 0 ).
   int sip_message_delay = 0;
 

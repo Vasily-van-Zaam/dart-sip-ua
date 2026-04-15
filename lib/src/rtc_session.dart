@@ -209,9 +209,11 @@ class RTCSession extends EventManager implements Owner {
           'Cannot create DTMF sender: peerConnection is null');
     }
     final senders = await conn.getSenders();
-    final audioSender = senders.where(
-      (s) => s.track?.kind == 'audio',
-    ).firstOrNull;
+    final audioSender = senders
+        .where(
+          (s) => s.track?.kind == 'audio',
+        )
+        .firstOrNull;
     if (audioSender == null) {
       throw Exceptions.InvalidStateError(
           'Cannot create DTMF sender: no audio sender found');
@@ -871,8 +873,7 @@ class RTCSession extends EventManager implements Owner {
           };
 
           // .., or when the INVITE transaction times out
-          _request.server_transaction.on(EventStateChanged(),
-              (_) {
+          _request.server_transaction.on(EventStateChanged(), (_) {
             if (_request.server_transaction.state ==
                 TransactionState.TERMINATED) {
               sendRequest(SipMethod.BYE, <String, dynamic>{
@@ -903,7 +904,8 @@ class RTCSession extends EventManager implements Owner {
         } else if (skipBye) {
           // 408/481 on in-dialog request: peer no longer has this dialog (RFC 3261
           // §12.2.1.2). Do not send BYE — it yields 481 "Call Does Not Exist".
-          logger.d('terminating session (skip BYE: peer dialog already cleared)');
+          logger
+              .d('terminating session (skip BYE: peer dialog already cleared)');
           final int sc = status_code ?? 481;
           final String phrase = reason_phrase ?? 'Dialog Error';
           _ended(
@@ -1436,8 +1438,9 @@ class RTCSession extends EventManager implements Owner {
         case SipMethod.BYE:
           if (_status == C.STATUS_CONFIRMED) {
             request.reply(200);
-            final reasonHeader =
-                request.hasHeader('Reason') ? '${request.getHeader('Reason')}' : null;
+            final reasonHeader = request.hasHeader('Reason')
+                ? '${request.getHeader('Reason')}'
+                : null;
             _ended(
                 'remote',
                 request,
@@ -1448,8 +1451,9 @@ class RTCSession extends EventManager implements Owner {
           } else if (_status == C.STATUS_INVITE_RECEIVED) {
             request.reply(200);
             _request.reply(487, 'BYE Received');
-            final reasonHeader =
-                request.hasHeader('Reason') ? '${request.getHeader('Reason')}' : null;
+            final reasonHeader = request.hasHeader('Reason')
+                ? '${request.getHeader('Reason')}'
+                : null;
             _ended(
                 'remote',
                 request,
@@ -1746,9 +1750,8 @@ class RTCSession extends EventManager implements Owner {
   void _iceRestart() {
     _iceRestartDebounceTimer?.cancel();
     final int baseDebounceMs = 380;
-    final int staggerMs = _ua.activeSessionCount > 1
-        ? 120 + (identityHashCode(this) % 520)
-        : 0;
+    final int staggerMs =
+        _ua.activeSessionCount > 1 ? 120 + (identityHashCode(this) % 520) : 0;
     _iceRestartDebounceTimer =
         Timer(Duration(milliseconds: baseDebounceMs + staggerMs), () {
       _iceRestartDebounceTimer = null;
@@ -1975,15 +1978,16 @@ class RTCSession extends EventManager implements Owner {
       _rtcReady = true;
       final errStr = error.toString();
       if (errStr.contains('peerConnection is null')) {
-        logger.w('setLocalDescription skipped: peerConnection already disposed');
+        logger
+            .w('setLocalDescription skipped: peerConnection already disposed');
         if (!completer.isCompleted) {
           completer.completeError(Exceptions.InvalidStateError(
               'createLocalDescription() | peer connection disposed during setLocalDescription'));
         }
         return completer.future;
       }
-      logger.e(
-          'emit "peerconnection:setlocaldescriptionfailed" [error:$errStr]');
+      logger
+          .e('emit "peerconnection:setlocaldescriptionfailed" [error:$errStr]');
       emit(EventSetLocalDescriptionFailed(exception: error));
       if (!completer.isCompleted) {
         completer.completeError(error);
@@ -2353,7 +2357,8 @@ class RTCSession extends EventManager implements Owner {
       try {
         request.reply(481);
       } catch (e, st) {
-        logger.e('reply(481) after terminated (pre setRemoteDescription): $e\n$st');
+        logger.e(
+            'reply(481) after terminated (pre setRemoteDescription): $e\n$st');
       }
       return null;
     }
@@ -2377,7 +2382,8 @@ class RTCSession extends EventManager implements Owner {
       try {
         request.reply(500);
       } catch (e, st) {
-        logger.e('reply(500) after terminated (post setRemoteDescription): $e\n$st');
+        logger.e(
+            'reply(500) after terminated (post setRemoteDescription): $e\n$st');
       }
       return null;
     }
@@ -2829,8 +2835,7 @@ class RTCSession extends EventManager implements Owner {
       // We created a SDP 'answer' for it, so check the current signaling state.
       final RTCPeerConnection? pc200 = _connection;
       if (pc200 != null &&
-          (pc200.signalingState ==
-                  RTCSignalingState.RTCSignalingStateStable ||
+          (pc200.signalingState == RTCSignalingState.RTCSignalingStateStable ||
               pc200.signalingState ==
                   RTCSignalingState.RTCSignalingStateHaveLocalOffer)) {
         try {
@@ -2838,14 +2843,16 @@ class RTCSession extends EventManager implements Owner {
               await pc200.createOffer(_rtcOfferConstraints!);
           // Re-check: connection may have been disposed during async createOffer.
           if (_connection == null) {
-            logger.w('peerConnection disposed between createOffer and setLocalDescription (200 OK handler)');
+            logger.w(
+                'peerConnection disposed between createOffer and setLocalDescription (200 OK handler)');
           } else {
             await _connection!.setLocalDescription(offer);
           }
         } catch (error) {
           final errStr = error.toString();
           if (errStr.contains('peerConnection is null')) {
-            logger.w('setLocalDescription skipped in 200 OK handler: peerConnection already disposed');
+            logger.w(
+                'setLocalDescription skipped in 200 OK handler: peerConnection already disposed');
           } else {
             _acceptAndTerminate(response, 500, errStr);
             _failed(
@@ -2862,7 +2869,8 @@ class RTCSession extends EventManager implements Owner {
 
       try {
         if (_connection == null) {
-          logger.w('peerConnection disposed before setRemoteDescription (200 OK handler)');
+          logger.w(
+              'peerConnection disposed before setRemoteDescription (200 OK handler)');
           return;
         }
         await _connection!.setRemoteDescription(answer);
@@ -2874,7 +2882,8 @@ class RTCSession extends EventManager implements Owner {
       } catch (error) {
         final errStr = error.toString();
         if (errStr.contains('peerConnection is null')) {
-          logger.w('setRemoteDescription skipped in 200 OK handler: peerConnection already disposed');
+          logger.w(
+              'setRemoteDescription skipped in 200 OK handler: peerConnection already disposed');
           return;
         }
         _acceptAndTerminate(response, 488, 'Not Acceptable Here');
@@ -2960,7 +2969,8 @@ class RTCSession extends EventManager implements Owner {
 
       void onFailed([dynamic response]) {
         if (_status != C.STATUS_TERMINATED) {
-          eventHandlers.emit(EventCallFailed(session: this, response: response));
+          eventHandlers
+              .emit(EventCallFailed(session: this, response: response));
         }
         markInviteTransactionDone();
       }
@@ -2992,7 +3002,8 @@ class RTCSession extends EventManager implements Owner {
         }
 
         logger.d('emit "sdp"');
-        emit(EventSdp(originator: 'remote', type: 'answer', sdp: response.body));
+        emit(
+            EventSdp(originator: 'remote', type: 'answer', sdp: response.body));
 
         RTCSessionDescription answer =
             RTCSessionDescription(response.body, 'answer');
@@ -3046,13 +3057,11 @@ class RTCSession extends EventManager implements Owner {
             markInviteTransactionDone();
             return;
           }
-          desc =
-              await _createLocalDescription('offer', rtcOfferConstraints);
+          desc = await _createLocalDescription('offer', rtcOfferConstraints);
           sdp = _mangleOffer(desc.sdp);
         }
 
-        final bool bypassViability =
-            opts['bypassReinviteSdpViability'] == true;
+        final bool bypassViability = opts['bypassReinviteSdpViability'] == true;
         if (_isReinviteOfferSdpIcePoison(sdp)) {
           logger.w(
               'sendReinvite() | offer SDP ICE not ready after $icePoisonMaxRetries retries; skip re-INVITE');
@@ -3615,7 +3624,9 @@ class RTCSession extends EventManager implements Owner {
           'SDP: interop — injected WebRTC DTLS/ICE into legacy RTP/AVP offer');
       // Only the initial incoming [answer] runs at STATUS_ANSWERED; in-dialog
       // re-INVITEs use STATUS_CONFIRMED and must not trigger this.
-      if (_direction == 'incoming' && _status == C.STATUS_ANSWERED) {
+      if (_direction == 'incoming' &&
+          _status == C.STATUS_ANSWERED &&
+          _ua.configuration.post_ack_reinvite_enabled) {
         _needsPostAckMediaRenegotiation = true;
       }
       return _sdpOfferToWebRTC(merged);
