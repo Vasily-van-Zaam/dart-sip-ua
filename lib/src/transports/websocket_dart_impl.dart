@@ -204,8 +204,29 @@ class SIPUAWebSocketImpl {
       Uri uri = parsed_uri.replace(
           scheme: parsed_uri.scheme == 'wss' ? 'https' : 'http');
 
+      // Резолвим DNS один раз и подключаемся по IP,
+      // чтобы кратковременные DNS-проблемы не убивали соединение.
+      final String originalHost = uri.host;
+      List<InternetAddress> addresses;
+      try {
+        addresses = await InternetAddress.lookup(originalHost);
+      } catch (e) {
+        logger.e('DNS lookup failed for $originalHost: $e');
+        rethrow;
+      }
+      if (addresses.isEmpty) {
+        throw SocketException('DNS lookup returned no addresses for $originalHost');
+      }
+      final String resolvedIp = addresses.first.address;
+      logger.d('DNS resolved $originalHost → $resolvedIp');
+      final Uri resolvedUri = uri.replace(host: resolvedIp);
+
       HttpClientRequest request =
-          await client.getUrl(uri); // form the correct url here
+          await client.getUrl(resolvedUri);
+      // Устанавливаем Host header на оригинальный hostname
+      // чтобы TLS SNI и HTTP Host работали корректно.
+      request.headers.set('Host', '$originalHost:${uri.port}',
+          preserveHeaderCase: true);
       request.headers.add('Connection', 'Upgrade', preserveHeaderCase: true);
       request.headers.add('Upgrade', 'websocket', preserveHeaderCase: true);
       request.headers.add('Sec-WebSocket-Version', '13',
@@ -226,6 +247,11 @@ class SIPUAWebSocketImpl {
         protocol: 'sip',
         serverSide: false,
       );
+
+      // Закрываем HttpClient чтобы он не держал idle connections
+      // и не пытался переразрешать DNS, что может убить WS-соединение
+      // при кратковременных DNS-проблемах.
+      client.close(force: false);
 
       return webSocket;
     } catch (e) {
