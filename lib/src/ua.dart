@@ -891,6 +891,8 @@ class UA extends EventManager {
 
     _configuration.terminateOnAudioMediaPortZero =
         configuration.terminateOnAudioMediaPortZero;
+    _configuration.post_ack_reinvite_enabled =
+        configuration.post_ack_reinvite_enabled;
 
     hostport_params.user = null;
     _configuration.hostport_params = hostport_params

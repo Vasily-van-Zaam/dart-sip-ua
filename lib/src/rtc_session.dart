@@ -3624,10 +3624,13 @@ class RTCSession extends EventManager implements Owner {
           'SDP: interop — injected WebRTC DTLS/ICE into legacy RTP/AVP offer');
       // Only the initial incoming [answer] runs at STATUS_ANSWERED; in-dialog
       // re-INVITEs use STATUS_CONFIRMED and must not trigger this.
+      logger.d(
+          'SDP: postAckReinvite check — direction=$_direction status=$_status enabled=${_ua.configuration.post_ack_reinvite_enabled}');
       if (_direction == 'incoming' &&
           _status == C.STATUS_ANSWERED &&
           _ua.configuration.post_ack_reinvite_enabled) {
         _needsPostAckMediaRenegotiation = true;
+        logger.d('SDP: postAckReinvite — WILL send re-INVITE after ACK');
       }
       return _sdpOfferToWebRTC(merged);
     } catch (e, stackTrace) {
