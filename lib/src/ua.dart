@@ -1249,8 +1249,16 @@ class UA extends EventManager {
     handlers.on(EventSucceeded(), (EventSucceeded _) {
       _onCallKeepAliveSuccess();
     });
-    handlers.on(EventCallFailed(), (EventCallFailed _) {
-      _onCallKeepAliveFailure();
+    handlers.on(EventCallFailed(), (EventCallFailed event) {
+      // Any SIP response (even 4xx/5xx) means the transport is alive.
+      // Only treat as failure if there was no response at all (timeout/transport error).
+      final int? code = event.cause?.status_code;
+      if (code != null && code > 0) {
+        logger.d('Call keepalive got SIP $code — transport is alive');
+        _onCallKeepAliveSuccess();
+      } else {
+        _onCallKeepAliveFailure();
+      }
     });
 
     try {
@@ -1422,8 +1430,16 @@ class UA extends EventManager {
     handlers.on(EventSucceeded(), (EventSucceeded _) {
       _onTransportOptionsProbeSuccess();
     });
-    handlers.on(EventCallFailed(), (EventCallFailed _) {
-      _onTransportOptionsProbeFailure();
+    handlers.on(EventCallFailed(), (EventCallFailed event) {
+      // Any SIP response (even 4xx/5xx) means the transport is alive.
+      // Only treat as failure if there was no response at all (timeout/transport error).
+      final int? code = event.cause?.status_code;
+      if (code != null && code > 0) {
+        logger.d('OPTIONS probe got SIP $code — transport is alive');
+        _onTransportOptionsProbeSuccess();
+      } else {
+        _onTransportOptionsProbeFailure();
+      }
     });
 
     try {
