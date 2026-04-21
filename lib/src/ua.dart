@@ -893,6 +893,11 @@ class UA extends EventManager {
         configuration.terminateOnAudioMediaPortZero;
     _configuration.post_ack_reinvite_enabled =
         configuration.post_ack_reinvite_enabled;
+    // config.load() не регистрирует connection_recovery_max_attempts,
+    // поэтому копируем вручную — иначе лимит попыток reconnect не работает
+    // и клиент делает reconnect бесконечно при падении FS.
+    _configuration.connection_recovery_max_attempts =
+        configuration.connection_recovery_max_attempts;
 
     hostport_params.user = null;
     _configuration.hostport_params = hostport_params
