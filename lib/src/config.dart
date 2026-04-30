@@ -30,6 +30,32 @@ class Settings {
   /// все последующие `createOffer`/`createAnswer`.
   static List<String> preferredAudioCodecs = <String>['PCMA'];
 
+  /// Удалять ли все кодеки кроме [preferredAudioCodecs] из исходящего
+  /// SDP. Без этого опции остаются как fallback (`m=audio … 8 111 63 9
+  /// 0 13 110 126`), и сервер мог бы выбрать что-то отличное от
+  /// preferred. Когда `true` — оффер вычищается до `m=audio … 8`
+  /// (только PCMA + telephone-event для DTMF).
+  ///
+  /// Полезно для PSTN-gateway'ев которые ругаются на opus/G722/PCMU
+  /// в списке либо неправильно выбирают приоритет. Дефолт `true` —
+  /// для России / ТфОП. Чтобы отключить (вернуться к pre-restriction
+  /// поведению где `preferAudioCodecs` только переставляет PT) —
+  /// поставить `false`.
+  static bool restrictToPreferredAudioCodecs = true;
+
+  /// При [restrictToPreferredAudioCodecs] = true оставлять ли в SDP
+  /// `telephone-event` payload-types (RFC 2833 DTMF). По умолчанию
+  /// `true` — без этого `RTCRtpSender.insertDtmf` (например, наш spy
+  /// whisper через `sendDTMF`) перестанет работать. Поставить `false`
+  /// если DTMF идёт строго через SIP INFO и нужен SDP в виде ровно
+  /// `m=audio … 8` без telephone-event.
+  static bool keepDtmfPayloadTypes = true;
+
+  /// При [restrictToPreferredAudioCodecs] = true оставлять ли в SDP
+  /// `CN` (comfort noise) payload-types. По умолчанию `false` — большинство
+  /// PSTN-gateway'ев их игнорируют, в чистом offer не нужны.
+  static bool keepCnPayloadTypes = false;
+
   // SIP authentication.
   String? authorization_user;
   String? password;

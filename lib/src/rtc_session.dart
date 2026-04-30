@@ -1901,10 +1901,23 @@ class RTCSession extends EventManager implements Owner {
     );
     if (preferredCodecs.isNotEmpty && desc.sdp != null) {
       final originalSdp = desc.sdp!;
-      final mungedSdp = preferAudioCodecs(originalSdp, preferredCodecs);
+      // Шаг 1: reorder — preferred PT'ы вперёд (для случая когда
+      // restriction выключен и нам нужен только приоритет).
+      var mungedSdp = preferAudioCodecs(originalSdp, preferredCodecs);
+      // Шаг 2: restriction — удаляем неwanted кодеки если флаг включён.
+      // Сервер перестанет видеть opus/G722/PCMU/red в offer и не сможет
+      // negotiate'нуть что-то отличное от PCMA.
+      if (Settings.restrictToPreferredAudioCodecs) {
+        mungedSdp = restrictAudioCodecs(
+          mungedSdp,
+          preferredCodecs,
+          keepDtmf: Settings.keepDtmfPayloadTypes,
+          keepCn: Settings.keepCnPayloadTypes,
+        );
+      }
       if (mungedSdp != originalSdp) {
         // Извлекаем m=audio строку из обоих для лога — короче и сразу
-        // видно сработал ли reorder.
+        // видно сработал ли reorder/filter.
         String _audioLine(String sdp) {
           final lines = sdp.split(RegExp(r'\r?\n'));
           return lines.firstWhere(
@@ -1913,14 +1926,19 @@ class RTCSession extends EventManager implements Owner {
           );
         }
 
-        logger.d('codec preference applied:');
+        logger.d(
+          'codec preference applied (restrict='
+          '${Settings.restrictToPreferredAudioCodecs}, dtmf='
+          '${Settings.keepDtmfPayloadTypes}):',
+        );
         logger.d('  before: ${_audioLine(originalSdp)}');
         logger.d('  after:  ${_audioLine(mungedSdp)}');
         desc = RTCSessionDescription(mungedSdp, desc.type);
       } else {
         logger.d(
           'codec preference no-op (SDP unchanged) — '
-          'возможно codec не предложен libwebrtc, либо уже первый',
+          'возможно codec не предложен libwebrtc, либо уже первый '
+          'и restriction выключен',
         );
       }
     }
