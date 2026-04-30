@@ -1895,10 +1895,33 @@ class RTCSession extends EventManager implements Owner {
     // Управляется через [Settings.preferredAudioCodecs]. По умолчанию
     // `['PCMA']`. Для отключения — пустой список.
     final preferredCodecs = Settings.preferredAudioCodecs;
+    logger.d(
+      'codec preference check: preferredCodecs=$preferredCodecs, '
+      'sdpHasContent=${desc.sdp != null && desc.sdp!.isNotEmpty}',
+    );
     if (preferredCodecs.isNotEmpty && desc.sdp != null) {
-      final mungedSdp = preferAudioCodecs(desc.sdp!, preferredCodecs);
-      if (mungedSdp != desc.sdp) {
+      final originalSdp = desc.sdp!;
+      final mungedSdp = preferAudioCodecs(originalSdp, preferredCodecs);
+      if (mungedSdp != originalSdp) {
+        // Извлекаем m=audio строку из обоих для лога — короче и сразу
+        // видно сработал ли reorder.
+        String _audioLine(String sdp) {
+          final lines = sdp.split(RegExp(r'\r?\n'));
+          return lines.firstWhere(
+            (l) => l.startsWith('m=audio'),
+            orElse: () => '<no m=audio>',
+          );
+        }
+
+        logger.d('codec preference applied:');
+        logger.d('  before: ${_audioLine(originalSdp)}');
+        logger.d('  after:  ${_audioLine(mungedSdp)}');
         desc = RTCSessionDescription(mungedSdp, desc.type);
+      } else {
+        logger.d(
+          'codec preference no-op (SDP unchanged) — '
+          'возможно codec не предложен libwebrtc, либо уже первый',
+        );
       }
     }
 
