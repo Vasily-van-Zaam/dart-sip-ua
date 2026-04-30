@@ -1895,22 +1895,44 @@ class RTCSession extends EventManager implements Owner {
     // Управляется через [Settings.preferredAudioCodecs]. По умолчанию
     // `['PCMA']`. Для отключения — пустой список.
     final preferredCodecs = Settings.preferredAudioCodecs;
+    // Effective preferred:
+    //   * type='offer' (outgoing INVITE): ровно один кодек из настроек.
+    //     Это требование PSTN-gateway'я — «на FS только a в offer'е».
+    //   * type='answer' (200 OK на incoming INVITE): preferred + G.711 пара
+    //     (PCMA, PCMU). Зачем — наш FreeSWITCH работает в no-transcoding
+    //     режиме и pass-through'ит RTP между leg'ами. Если оператор A на
+    //     старой версии (default PCMU) звонит оператору B на новой версии
+    //     (default PCMA), а B-restrict оставит в answer'е только PCMA —
+    //     RTP A↔FS пойдёт PCMU, FS↔B пойдёт PCMA, FS их не свяжет, обе
+    //     стороны услышат тишину. С обоими PCMA и PCMU в answer'е libwebrtc
+    //     сам ставит первым тот PT, который remote выбрал первым (RFC 3264
+    //     §6.1), и FS-pass-through сходится на одном кодеке для обоих
+    //     leg'ов. Подтверждено тестом: ответ `m=audio … 8 101` (только
+    //     PCMA) даёт тишину, `m=audio … 0 8 101` или `8 0 101` — звук.
+    final List<String> effectivePreferred = type == 'answer'
+        ? <String>[
+            ...preferredCodecs,
+            if (!preferredCodecs.contains('PCMA')) 'PCMA',
+            if (!preferredCodecs.contains('PCMU')) 'PCMU',
+          ]
+        : preferredCodecs;
     logger.d(
-      'codec preference check: preferredCodecs=$preferredCodecs, '
+      'codec preference check: type=$type, preferred=$preferredCodecs, '
+      'effective=$effectivePreferred, '
       'sdpHasContent=${desc.sdp != null && desc.sdp!.isNotEmpty}',
     );
-    if (preferredCodecs.isNotEmpty && desc.sdp != null) {
+    if (effectivePreferred.isNotEmpty && desc.sdp != null) {
       final originalSdp = desc.sdp!;
       // Шаг 1: reorder — preferred PT'ы вперёд (для случая когда
       // restriction выключен и нам нужен только приоритет).
-      var mungedSdp = preferAudioCodecs(originalSdp, preferredCodecs);
+      var mungedSdp = preferAudioCodecs(originalSdp, effectivePreferred);
       // Шаг 2: restriction — удаляем неwanted кодеки если флаг включён.
-      // Сервер перестанет видеть opus/G722/PCMU/red в offer и не сможет
-      // negotiate'нуть что-то отличное от PCMA.
+      // Для outgoing offer оставит только preferred (один кодек).
+      // Для answer оставит preferred + G.711 fallback (см. effectivePreferred).
       if (Settings.restrictToPreferredAudioCodecs) {
         mungedSdp = restrictAudioCodecs(
           mungedSdp,
-          preferredCodecs,
+          effectivePreferred,
           keepDtmf: Settings.keepDtmfPayloadTypes,
           keepCn: Settings.keepCnPayloadTypes,
         );
