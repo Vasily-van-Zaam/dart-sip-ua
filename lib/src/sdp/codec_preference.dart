@@ -203,3 +203,87 @@ String restrictAudioCodecs(
   }
   return out.join(eol);
 }
+
+/// Renumbers `telephone-event` payload-type to a fixed [targetPt].
+///
+/// libwebrtc выдаёт `telephone-event` с динамическими PT (обычно 110 для
+/// 48000 и 126 для 8000). Многие PSTN-gateway'и (особенно legacy SIP-АТС)
+/// **хардкодят PT 101** для DTMF и не negotiate'ят другой — RFC 4733 не
+/// фиксирует значение, но 101 стал стандартом де-факто. Наш Dart-клиент
+/// вычищает SDP до `m=audio … 8 126`, FreeSWITCH такое принимает и сам
+/// negotiate'ит 126, но другие реализации могут не уметь.
+///
+/// Эта функция перенумеровывает единственный (после `restrictAudioCodecs`)
+/// `telephone-event` PT в [targetPt]. Меняет в:
+///   * списке PT в `m=audio` строке;
+///   * `a=rtpmap:N`, `a=fmtp:N`, `a=rtcp-fb:N` для этого PT.
+///
+/// No-op safety:
+///   * `targetPt == null` или `<= 0` — выходим.
+///   * `telephone-event` в SDP отсутствует — выходим.
+///   * Старый PT уже равен [targetPt] — выходим.
+///   * [targetPt] уже занят другим кодеком в SDP — выходим (нельзя
+///     создать collision, иначе сломали бы оффер).
+///
+/// Если несколько `telephone-event` (например, после restriction
+/// keepDtmf=true оставлены оба rate) — переименовываем только первый
+/// найденный с тем `rate`, который соответствует preferred codec'у.
+/// Других trogeать не имеет смысла, потому что 101 — единый PT.
+String normalizeDtmfPayloadType(String sdp, {int targetPt = 101}) {
+  if (targetPt <= 0) return sdp;
+  if (!sdp.contains('telephone-event')) return sdp;
+
+  final String eol = sdp.contains('\r\n') ? '\r\n' : '\n';
+  final List<String> lines = sdp.split(eol);
+
+  // 1. Собираем PT всех кодеков (для проверки что target не занят) и
+  // отдельно — PT именно telephone-event (всех его вариантов по rate).
+  final Set<String> usedPts = <String>{};
+  final List<String> dtmfPts = <String>[];
+  final RegExp rtpmapRe = RegExp(r'^a=rtpmap:(\d+)\s+([^/]+)/');
+  for (final String l in lines) {
+    final RegExpMatch? m = rtpmapRe.firstMatch(l);
+    if (m == null) continue;
+    final String pt = m.group(1)!;
+    final String codec = m.group(2)!.toUpperCase();
+    usedPts.add(pt);
+    if (codec == 'TELEPHONE-EVENT') dtmfPts.add(pt);
+  }
+  if (dtmfPts.isEmpty) return sdp;
+
+  final String targetStr = '$targetPt';
+  if (dtmfPts.contains(targetStr)) return sdp; // уже стандарт.
+  if (usedPts.contains(targetStr)) return sdp; // collision — не трогаем.
+
+  // 2. Перенумеровываем первый telephone-event PT (после restrict
+  // обычно один). Меняем во всех местах: m=audio + a=rtpmap/fmtp/rtcp-fb.
+  final String oldPt = dtmfPts.first;
+  final RegExp audioMRe = RegExp(r'^(m=audio\s+\S+\s+\S+)\s+(.+)$');
+  final RegExp ptAttrRe = RegExp(r'^a=(rtpmap|rtcp-fb|fmtp):(\d+)(\s.*)?$');
+
+  final List<String> out = <String>[];
+  bool mAudioReplaced = false;
+  for (final String l in lines) {
+    if (!mAudioReplaced) {
+      final RegExpMatch? m = audioMRe.firstMatch(l);
+      if (m != null) {
+        final List<String> pts = m
+            .group(2)!
+            .split(RegExp(r'\s+'))
+            .map((String pt) => pt == oldPt ? targetStr : pt)
+            .toList();
+        out.add('${m.group(1)!} ${pts.join(' ')}');
+        mAudioReplaced = true;
+        continue;
+      }
+    }
+    final RegExpMatch? am = ptAttrRe.firstMatch(l);
+    if (am != null && am.group(2) == oldPt) {
+      final String tail = am.group(3) ?? '';
+      out.add('a=${am.group(1)!}:$targetStr$tail');
+      continue;
+    }
+    out.add(l);
+  }
+  return out.join(eol);
+}

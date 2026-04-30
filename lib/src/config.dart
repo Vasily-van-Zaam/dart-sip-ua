@@ -56,6 +56,15 @@ class Settings {
   /// PSTN-gateway'ев их игнорируют, в чистом offer не нужны.
   static bool keepCnPayloadTypes = false;
 
+  /// Целевой payload-type для `telephone-event` (RFC 4733 / DTMF).
+  /// libwebrtc выдаёт динамические PT (обычно 110 для 48000 и 126 для
+  /// 8000), но многие PSTN-gateway'и хардкодят `101` как стандарт
+  /// де-факто и не negotiate'ят другой — для совместимости с такими
+  /// серверами renumber'им PT после restriction'а. Поставить `0` или
+  /// отрицательное — отключить переименование (оставить как есть от
+  /// libwebrtc). По умолчанию 101.
+  static int dtmfPayloadType = 101;
+
   // SIP authentication.
   String? authorization_user;
   String? password;

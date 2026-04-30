@@ -1915,6 +1915,16 @@ class RTCSession extends EventManager implements Owner {
           keepCn: Settings.keepCnPayloadTypes,
         );
       }
+      // Шаг 3: переименование PT для telephone-event в стандарт-де-факто
+      // 101 (RFC 4733). Делаем после restrict — там обычно остаётся
+      // единственный telephone-event PT с rate'ом, совпадающим с
+      // preferred codec'ом.
+      if (Settings.dtmfPayloadType > 0) {
+        mungedSdp = normalizeDtmfPayloadType(
+          mungedSdp,
+          targetPt: Settings.dtmfPayloadType,
+        );
+      }
       if (mungedSdp != originalSdp) {
         // Извлекаем m=audio строку из обоих для лога — короче и сразу
         // видно сработал ли reorder/filter.
@@ -1929,7 +1939,8 @@ class RTCSession extends EventManager implements Owner {
         logger.d(
           'codec preference applied (restrict='
           '${Settings.restrictToPreferredAudioCodecs}, dtmf='
-          '${Settings.keepDtmfPayloadTypes}):',
+          '${Settings.keepDtmfPayloadTypes}, dtmfPt='
+          '${Settings.dtmfPayloadType}):',
         );
         logger.d('  before: ${_audioLine(originalSdp)}');
         logger.d('  after:  ${_audioLine(mungedSdp)}');
