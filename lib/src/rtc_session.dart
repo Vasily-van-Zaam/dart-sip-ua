@@ -22,6 +22,7 @@ import 'rtc_session/info.dart' as RTCSession_Info;
 import 'rtc_session/info.dart';
 import 'rtc_session/refer_notifier.dart';
 import 'rtc_session/refer_subscriber.dart';
+import 'sdp/codec_preference.dart';
 import 'timers.dart';
 import 'transactions/transaction_base.dart';
 import 'ua.dart';
@@ -1884,6 +1885,21 @@ class RTCSession extends EventManager implements Owner {
     for (Future<RTCSessionDescription> Function(RTCSessionDescription) modifier
         in modifiers) {
       desc = await modifier(desc);
+    }
+
+    // Применяем глобальный codec-preference поверх всех modifiers, ровно
+    // перед setLocalDescription. Это работает на всех платформах
+    // (Web/Native), потому что SDP — текстовый, и переупорядочивание
+    // payload-types в `m=audio` идентично везде.
+    //
+    // Управляется через [Settings.preferredAudioCodecs]. По умолчанию
+    // `['PCMA']`. Для отключения — пустой список.
+    final preferredCodecs = Settings.preferredAudioCodecs;
+    if (preferredCodecs.isNotEmpty && desc.sdp != null) {
+      final mungedSdp = preferAudioCodecs(desc.sdp!, preferredCodecs);
+      if (mungedSdp != desc.sdp) {
+        desc = RTCSessionDescription(mungedSdp, desc.type);
+      }
     }
 
     Future<void> ready() async {

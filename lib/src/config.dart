@@ -11,6 +11,25 @@ import 'utils.dart' as Utils;
 
 // Default settings.
 class Settings {
+  /// Глобальный приоритет аудио-кодеков для исходящих SDP offer/answer.
+  ///
+  /// Первый из списка, который libwebrtc/браузер реально предложил в
+  /// SDP, ставится самым приоритетным; остальные — в порядке списка.
+  /// Кодеки, которых нет в системе (libwebrtc/браузер их не предложил),
+  /// просто игнорируются — форсить отсутствующий кодек невозможно.
+  ///
+  /// Имена — как в `a=rtpmap` (case-insensitive). Стандартный набор
+  /// libwebrtc: `PCMA`, `PCMU`, `opus`, `G722`, плюс служебные `CN`,
+  /// `telephone-event`. Кодеков типа `G729` / `AMR` / `EVS` в bundled
+  /// libwebrtc нет (потребуется rebuild с новой реализацией).
+  ///
+  /// Дефолт `['PCMA']` — Россия / classic ТфОП. Установка `[]`
+  /// отключает munging и оставляет порядок browser/native.
+  ///
+  /// Меняется в рантайме (не требует переподключения SIP), действует на
+  /// все последующие `createOffer`/`createAnswer`.
+  static List<String> preferredAudioCodecs = <String>['PCMA'];
+
   // SIP authentication.
   String? authorization_user;
   String? password;
@@ -91,6 +110,7 @@ class Settings {
   /// In-call keepalive: send OPTIONS during active calls to detect dead transport.
   bool call_keep_alive_enabled = true;
   int call_keep_alive_interval_sec = 10;
+
   /// Response timeout for each in-call keepalive OPTIONS probe.
   /// If <= 0, the timeout falls back to `call_keep_alive_interval_sec`.
   int call_keep_alive_response_timeout_sec = -1;
@@ -302,7 +322,8 @@ class Checks {
       dst!.ice_gathering_timeout = src.ice_gathering_timeout;
     },
     'transport_options_probe_enabled': (Settings src, Settings? dst) {
-      dst!.transport_options_probe_enabled = src.transport_options_probe_enabled;
+      dst!.transport_options_probe_enabled =
+          src.transport_options_probe_enabled;
     },
     'transport_options_probe_idle_sec': (Settings src, Settings? dst) {
       final int value = src.transport_options_probe_idle_sec;
@@ -310,7 +331,8 @@ class Checks {
         dst!.transport_options_probe_idle_sec = value;
       }
     },
-    'transport_options_probe_response_timeout_sec': (Settings src, Settings? dst) {
+    'transport_options_probe_response_timeout_sec':
+        (Settings src, Settings? dst) {
       final int value = src.transport_options_probe_response_timeout_sec;
       if (value > 0) {
         dst!.transport_options_probe_response_timeout_sec = value;
