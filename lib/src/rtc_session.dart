@@ -1968,10 +1968,22 @@ class RTCSession extends EventManager implements Owner {
         logger.d('  after:  ${_audioLine(mungedSdp)}');
         desc = RTCSessionDescription(mungedSdp, desc.type);
       } else {
+        // SDP не поменялся ни на одном из 3 шагов (prefer / restrict /
+        // dtmf-renumber). Это **штатный** случай — означает что
+        // libwebrtc уже сам сложил SDP так, что:
+        //   * preferred PT уже первый (нечего переставлять);
+        //   * в SDP остались только preferred + telephone-event (для
+        //     answer'а — обычно так после createAnswer с пересечением
+        //     remote offer'а);
+        //   * telephone-event PT уже стандартный (101 чаще всего).
+        // Также сюда попадаем когда выбранного кодека нет в bundled
+        // libwebrtc (no-op safety в restrictAudioCodecs) или когда
+        // restriction выключен и preferAudioCodecs не нашёл что
+        // переставить.
         logger.d(
           'codec preference no-op (SDP unchanged) — '
-          'возможно codec не предложен libwebrtc, либо уже первый '
-          'и restriction выключен',
+          'munging не потребовался (libwebrtc уже выдал нужный SDP, '
+          'либо preferred codec отсутствует — graceful fallback)',
         );
       }
     }
