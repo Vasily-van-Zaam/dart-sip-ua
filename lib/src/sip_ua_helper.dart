@@ -211,8 +211,7 @@ class SIPUAHelper extends EventManager {
         uaSettings.callKeepAliveMaxAttempts;
     _settings.terminateOnAudioMediaPortZero =
         uaSettings.terminateOnMediaPortZero;
-    _settings.post_ack_reinvite_enabled =
-        uaSettings.postAckReinviteEnabled;
+    _settings.post_ack_reinvite_enabled = uaSettings.postAckReinviteEnabled;
 
     try {
       _ua = UA(_settings);
@@ -223,7 +222,8 @@ class SIPUAHelper extends EventManager {
             recoveryAttempt: event.recoveryAttempt));
       });
 
-      _ua!.on(EventSocketReconnectScheduled(), (EventSocketReconnectScheduled event) {
+      _ua!.on(EventSocketReconnectScheduled(),
+          (EventSocketReconnectScheduled event) {
         logger.d(
             'reconnect scheduled => attempt ${event.attempt} in ${event.delaySeconds}s');
         _notifyTransportStateListeners(TransportState(
@@ -630,14 +630,21 @@ class Call {
     _session.terminate(options);
   }
 
-  void hold() {
+  /// Возвращает `true` если re-INVITE с `a=sendonly` отправлен, `false`
+  /// если sip_ua отказался синхронно (call не CONFIRMED, уже на hold,
+  /// другой re-INVITE in-flight). Caller использует bool чтобы не
+  /// рассинхронизировать UI/DTO с фактическим состоянием session'а
+  /// в случае отказа (см. `SipService._handleHold`).
+  bool hold() {
     assert(_session != null, 'ERROR(hold): rtc session is invalid!');
-    _session.hold();
+    return _session.hold();
   }
 
-  void unhold() {
+  /// Возвращает `true` если re-INVITE с `a=sendrecv` отправлен.
+  /// См. документацию [hold].
+  bool unhold() {
     assert(_session != null, 'ERROR(unhold): rtc session is invalid!');
-    _session.unhold();
+    return _session.unhold();
   }
 
   void mute([bool audio = true, bool video = true]) {
@@ -787,8 +794,10 @@ enum TransportStateEnum {
   CONNECTING,
   CONNECTED,
   DISCONNECTED,
+
   /// Backoff running after [DISCONNECTED]; next state is usually [CONNECTING].
   RECONNECT_SCHEDULED,
+
   /// Max reconnection attempts exhausted. App should logout / show error.
   RECONNECT_FAILED,
 }
