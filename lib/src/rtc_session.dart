@@ -1895,27 +1895,39 @@ class RTCSession extends EventManager implements Owner {
     // Управляется через [Settings.preferredAudioCodecs]. По умолчанию
     // `['PCMA']`. Для отключения — пустой список.
     final preferredCodecs = Settings.preferredAudioCodecs;
-    // Effective preferred:
-    //   * type='offer' (outgoing INVITE): ровно один кодек из настроек.
-    //     Это требование PSTN-gateway'я — «на FS только a в offer'е».
-    //   * type='answer' (200 OK на incoming INVITE): preferred + G.711 пара
-    //     (PCMA, PCMU). Зачем — наш FreeSWITCH работает в no-transcoding
-    //     режиме и pass-through'ит RTP между leg'ами. Если оператор A на
-    //     старой версии (default PCMU) звонит оператору B на новой версии
-    //     (default PCMA), а B-restrict оставит в answer'е только PCMA —
-    //     RTP A↔FS пойдёт PCMU, FS↔B пойдёт PCMA, FS их не свяжет, обе
-    //     стороны услышат тишину. С обоими PCMA и PCMU в answer'е libwebrtc
-    //     сам ставит первым тот PT, который remote выбрал первым (RFC 3264
-    //     §6.1), и FS-pass-through сходится на одном кодеке для обоих
-    //     leg'ов. Подтверждено тестом: ответ `m=audio … 8 101` (только
-    //     PCMA) даёт тишину, `m=audio … 0 8 101` или `8 0 101` — звук.
-    final List<String> effectivePreferred = type == 'answer'
-        ? <String>[
-            ...preferredCodecs,
-            if (!preferredCodecs.contains('PCMA')) 'PCMA',
-            if (!preferredCodecs.contains('PCMU')) 'PCMU',
-          ]
-        : preferredCodecs;
+    // Effective preferred — ОДИНАКОВО для offer и answer:
+    //   `[user_choice, PCMA, PCMU]` (в этом порядке, без дубликатов).
+    //
+    // Зачем такая структура:
+    //   * Первым идёт ручной выбор оператора (см. UI Settings → Audio
+    //     Codec). При совпадении с тем что предлагает peer — он и
+    //     согласовывается.
+    //   * G.711 пара (PCMA, PCMU) — обязательный fallback. Сценарии:
+    //
+    //     [outgoing INVITE / re-INVITE]: если пир на другой версии
+    //     клиента / другом vendor'е и не поддерживает наш ручной
+    //     выбор (например мы на opus, peer не умеет opus, или
+    //     A на PCMA + B на PCMU без transcoding'а) — peer возьмёт
+    //     PCMA или PCMU и звонок установится. Без fallback'а получили
+    //     бы 488 Not Acceptable Here.
+    //
+    //     [incoming answer]: наш FreeSWITCH работает в no-transcoding
+    //     режиме и pass-through'ит RTP между leg'ами. Если в answer'е
+    //     оставить только наш ручной кодек, а peer звонит с другим —
+    //     RTP A↔FS пойдёт одним кодеком, FS↔B другим, FS их не свяжет,
+    //     обе стороны услышат тишину. С обоими PCMA и PCMU в answer'е
+    //     libwebrtc сам ставит первым тот PT, который remote выбрал
+    //     первым (RFC 3264 §6.1), и FS-pass-through сходится на одном
+    //     кодеке для обоих leg'ов.
+    //
+    //   Подтверждено тестом: `m=audio … 8 101` (только PCMA) даёт
+    //   тишину при cross-codec звонке; `m=audio … 0 8 101` или
+    //   `8 0 101` — звук.
+    final List<String> effectivePreferred = <String>[
+      ...preferredCodecs,
+      if (!preferredCodecs.contains('PCMA')) 'PCMA',
+      if (!preferredCodecs.contains('PCMU')) 'PCMU',
+    ];
     logger.d(
       'codec preference check: type=$type, preferred=$preferredCodecs, '
       'effective=$effectivePreferred, '
