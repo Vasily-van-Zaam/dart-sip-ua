@@ -35,9 +35,10 @@ class SIPUAWebSocketImpl {
     // instead of bubbling up as unhandled exceptions.
     runZonedGuarded(() async {
       try {
-        final int connectTimeoutSec = webSocketSettings.connectionConnectTimeoutSec;
-        final Duration connectTimeout = Duration(
-            seconds: connectTimeoutSec > 0 ? connectTimeoutSec : 8);
+        final int connectTimeoutSec =
+            webSocketSettings.connectionConnectTimeoutSec;
+        final Duration connectTimeout =
+            Duration(seconds: connectTimeoutSec > 0 ? connectTimeoutSec : 8);
         if (webSocketSettings.allowBadCertificate) {
           /// Allow self-signed certificate, for test only.
           _socket = await _connectForBadCertificate(_url, webSocketSettings)
@@ -157,7 +158,11 @@ class SIPUAWebSocketImpl {
       return;
     }
     try {
-      ws.close(WebSocketStatus.normalClosure, 'sip ua transport replace');
+      // Reason специально не передаём: при «Выход» сервер логирует
+      // close с reason'ом «sip ua transport replace», что засоряет
+      // логи и пугает админов. По RFC 6455 reason опционален —
+      // CLOSE-фрейм с одним только status code (1000 / normal) валиден.
+      ws.close(WebSocketStatus.normalClosure);
     } catch (_) {}
     try {
       await ws.done.timeout(waitForDone);
@@ -215,18 +220,18 @@ class SIPUAWebSocketImpl {
         rethrow;
       }
       if (addresses.isEmpty) {
-        throw SocketException('DNS lookup returned no addresses for $originalHost');
+        throw SocketException(
+            'DNS lookup returned no addresses for $originalHost');
       }
       final String resolvedIp = addresses.first.address;
       logger.d('DNS resolved $originalHost → $resolvedIp');
       final Uri resolvedUri = uri.replace(host: resolvedIp);
 
-      HttpClientRequest request =
-          await client.getUrl(resolvedUri);
+      HttpClientRequest request = await client.getUrl(resolvedUri);
       // Устанавливаем Host header на оригинальный hostname
       // чтобы TLS SNI и HTTP Host работали корректно.
-      request.headers.set('Host', '$originalHost:${uri.port}',
-          preserveHeaderCase: true);
+      request.headers
+          .set('Host', '$originalHost:${uri.port}', preserveHeaderCase: true);
       request.headers.add('Connection', 'Upgrade', preserveHeaderCase: true);
       request.headers.add('Upgrade', 'websocket', preserveHeaderCase: true);
       request.headers.add('Sec-WebSocket-Version', '13',
