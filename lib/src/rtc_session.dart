@@ -1132,11 +1132,31 @@ class RTCSession extends EventManager implements Owner {
       }
     });
     handlers.on(EventCallFailed(), (EventCallFailed event) {
-      terminate(<String, dynamic>{
-        'cause': DartSIP_C.CausesType.WEBRTC_ERROR,
-        'status_code': 500,
-        'reason_phrase': 'Hold Failed'
-      });
+      // Re-INVITE на hold провалился — обычно glare (RFC 3261 §14.1).
+      // Кейс из прода: при Session-Expires=120 сервер шлёт session-
+      // refresh re-INVITE на T+60s; если оператор нажал Hold в окне
+      // ±200ms — наш re-INVITE получает `491 Request Pending`, его
+      // re-INVITE отвечается `488 Not Acceptable Here`. Раньше здесь
+      // был `terminate()` с reason="Hold Failed" → клиент шлёт BYE,
+      // звонок убивается. **Это серьёзная регрессия UX** — оператор
+      // теряет разговор только потому что попытался поставить hold.
+      //
+      // Правильное поведение: НЕ terminate'ить. Откатываем
+      // `_localHold = false`, эмитим `_onunhold('local')` — UI/scc
+      // увидит что звонок снова в talk-state. Звонок жив, оператор
+      // может попробовать Hold ещё раз через секунду (когда серверный
+      // refresh-tx завершится). Передаём `event.response` через `done`
+      // callback чтобы caller знал что Hold не сработал (response
+      // имеет status_code, например 491/488).
+      final statusCode = event.response?.status_code;
+      final reason = event.response?.reason_phrase;
+      logger.w('hold re-INVITE failed: $statusCode $reason — '
+          'rolling back, call stays active');
+      _localHold = false;
+      _onunhold('local');
+      if (done != null) {
+        done(event.response);
+      }
     });
 
     if (options['useUpdate'] != null) {
@@ -1187,11 +1207,19 @@ class RTCSession extends EventManager implements Owner {
       }
     });
     handlers.on(EventCallFailed(), (EventCallFailed event) {
-      terminate(<String, dynamic>{
-        'cause': DartSIP_C.CausesType.WEBRTC_ERROR,
-        'status_code': 500,
-        'reason_phrase': 'Unhold Failed'
-      });
+      // Симметрично hold() — НЕ terminate'им звонок при провале
+      // unhold-re-INVITE'а. Откатываем `_localHold = true` обратно,
+      // эмитим `_onhold('local')`, звонок остаётся в hold-state.
+      // Оператор может попробовать unhold ещё раз.
+      final statusCode = event.response?.status_code;
+      final reason = event.response?.reason_phrase;
+      logger.w('unhold re-INVITE failed: $statusCode $reason — '
+          'rolling back, call stays on hold');
+      _localHold = true;
+      _onhold('local');
+      if (done != null) {
+        done(event.response);
+      }
     });
 
     if (options['useUpdate'] != null) {
