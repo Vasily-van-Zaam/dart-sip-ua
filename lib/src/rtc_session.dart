@@ -133,6 +133,15 @@ class RTCSession extends EventManager implements Owner {
   ///   • call terminate.
   Timer? _glareRetryTimer;
 
+  /// `true` пока у нас есть UAC re-INVITE/UPDATE transaction в полёте
+  /// в этом диалоге. Используется в `_receiveReinvite` — если в момент
+  /// прихода входящего re-INVITE наш local tx ещё не завершён, нужно
+  /// отвечать `491 Request Pending` (RFC 3261 §14.2), НЕ `488 Not
+  /// Acceptable Here`. На 488 серверы типа FreeSWITCH немедленно шлют
+  /// BYE → теряем звонок. На 491 — сервер делает backoff и повторяет
+  /// session-refresh после нашего ответа.
+  bool _clientReinviteInFlight = false;
+
   /// One in-dialog client re-INVITE at a time **for this session** (RFC 3261).
   /// UA-global serialization wrongly blocked re-INVITEs on other dialogs sharing
   /// one TCP/WSS transport (attended transfer: hold leg + consult leg).
@@ -2303,6 +2312,27 @@ class RTCSession extends EventManager implements Owner {
   /// In dialog INVITE Reception
   void _receiveReinvite(IncomingRequest request) async {
     logger.d('receiveReinvite()');
+
+    // RFC 3261 §14.2 — Receiving a Re-INVITE:
+    // «If a UAS receives a re-INVITE for an existing dialog, it MUST
+    //  check any version identifiers in the SDP. ... If the UAS has
+    //  generated its own INVITE request and has not yet received an
+    //  answer to it, it SHOULD respond with 491 (Request Pending) and
+    //  then SHOULD wait a random time between 0 and 2 seconds before
+    //  retrying the request.»
+    //
+    // На проде (2026-05-19 HEP-диаграмма) клиент отвечал `488 Not
+    // Acceptable Here` в этой ситуации. FreeSWITCH видит 488 на свой
+    // session-refresh INVITE → сразу шлёт BYE → звонок убит, оператор
+    // теряет разговор. На 491 FreeSWITCH делает RFC-backoff и retry —
+    // звонок выживает.
+    if (_clientReinviteInFlight) {
+      logger.i('receiveReinvite() | local UAC re-INVITE in flight — '
+          'replying 491 Request Pending (RFC 3261 §14.2)');
+      request.reply(491);
+      return;
+    }
+
     String? contentType = request.getHeader('Content-Type');
 
     void sendAnswer(String? sdp) async {
@@ -3150,12 +3180,20 @@ class RTCSession extends EventManager implements Owner {
         if (!inviteTransactionDone.isCompleted) {
           inviteTransactionDone.complete();
         }
+        // Снимаем UAS-side флаг — после этого incoming re-INVITE будет
+        // обработан нормально (sendAnswer/200), а не отвечен 491.
+        _clientReinviteInFlight = false;
       }
 
       if (_status == C.STATUS_TERMINATED || _connection == null) {
         markInviteTransactionDone();
         return;
       }
+
+      // Помечаем что мы в полёте — RFC 3261 §14.2: пока наш UAC re-INVITE
+      // не завершён, на входящий in-dialog INVITE отвечаем 491. См. поле
+      // `_clientReinviteInFlight` и условие в `_receiveReinvite`.
+      _clientReinviteInFlight = true;
 
       List<dynamic> extraHeaders = opts['extraHeaders'] != null
           ? utils.cloneArray(opts['extraHeaders'])
@@ -3492,11 +3530,18 @@ class RTCSession extends EventManager implements Owner {
           'Session-Expires: ${_sessionTimers.currentExpires};refresher=${_sessionTimers.refresher ? 'uac' : 'uas'}');
     }
 
+    // RFC 3261 §14.2 / RFC 3311 — пока UAC UPDATE в полёте, входящий
+    // re-INVITE/UPDATE должен получить 491 Request Pending. См. поле
+    // `_clientReinviteInFlight`.
+    _clientReinviteInFlight = true;
+
     void onFailed([dynamic response]) {
+      _clientReinviteInFlight = false;
       eventHandlers.emit(EventCallFailed(session: this, response: response));
     }
 
     void onSucceeded(IncomingResponse? response) async {
+      _clientReinviteInFlight = false;
       if (_status == C.STATUS_TERMINATED) {
         return;
       }
