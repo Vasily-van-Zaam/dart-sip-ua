@@ -120,6 +120,19 @@ class RTCSession extends EventManager implements Owner {
   /// (attended transfer), avoiding overlapping re-INVITEs on the same TCP leg.
   Timer? _iceRestartDebounceTimer;
 
+  /// Auto-retry pending re-INVITE на 491 Request Pending (RFC 3261 §14.1).
+  /// При получении `491` мы делаем rollback state + ACK (sip_ua сама шлёт
+  /// ACK на final response) и ждём 5 секунд — за это время противоположная
+  /// сторона успевает обработать свой in-flight re-INVITE. Затем повторяем
+  /// нашу операцию (hold/unhold). Если retry тоже получает 491 — больше
+  /// не пытаемся (max 1 auto-retry), пусть оператор делает manual.
+  ///
+  /// Cancel'ится при:
+  ///   • user-initiated новой операции (manual hold/unhold) — отменяем
+  ///     старый retry, выполняем свежую;
+  ///   • call terminate.
+  Timer? _glareRetryTimer;
+
   /// One in-dialog client re-INVITE at a time **for this session** (RFC 3261).
   /// UA-global serialization wrongly blocked re-INVITEs on other dialogs sharing
   /// one TCP/WSS transport (attended transfer: hold leg + consult leg).
@@ -1105,7 +1118,22 @@ class RTCSession extends EventManager implements Owner {
    * Hold
    */
   bool hold([Map<String, dynamic>? options, Function(IncomingMessage?)? done]) {
-    logger.d('hold()');
+    return _holdInternal(options, done, isAutoRetry: false);
+  }
+
+  bool _holdInternal(
+    Map<String, dynamic>? options,
+    Function(IncomingMessage?)? done, {
+    required bool isAutoRetry,
+  }) {
+    logger.d('hold() (autoRetry=$isAutoRetry)');
+
+    // Manual hold/unhold отменяет pending auto-retry таймер: оператор
+    // явно дал команду, не нужно потом дёргать старый retry.
+    if (!isAutoRetry) {
+      _glareRetryTimer?.cancel();
+      _glareRetryTimer = null;
+    }
 
     options = options ?? <String, dynamic>{};
 
@@ -1138,22 +1166,34 @@ class RTCSession extends EventManager implements Owner {
       // ±200ms — наш re-INVITE получает `491 Request Pending`, его
       // re-INVITE отвечается `488 Not Acceptable Here`. Раньше здесь
       // был `terminate()` с reason="Hold Failed" → клиент шлёт BYE,
-      // звонок убивается. **Это серьёзная регрессия UX** — оператор
-      // теряет разговор только потому что попытался поставить hold.
+      // звонок убивается. Сейчас НЕ terminate'им — откатываем state,
+      // звонок продолжается на оригинальном RTP.
       //
-      // Правильное поведение: НЕ terminate'ить. Откатываем
-      // `_localHold = false`, эмитим `_onunhold('local')` — UI/scc
-      // увидит что звонок снова в talk-state. Звонок жив, оператор
-      // может попробовать Hold ещё раз через секунду (когда серверный
-      // refresh-tx завершится). Передаём `event.response` через `done`
-      // callback чтобы caller знал что Hold не сработал (response
-      // имеет status_code, например 491/488).
+      // Дополнительно: если 491 И это первая попытка (не retry), —
+      // через 5 сек автоматически повторяем hold. К этому моменту
+      // встречная in-flight tx гарантированно завершилась, retry
+      // обычно проходит. Если retry тоже даст 491 — больше не
+      // пытаемся, передаём response через done().
       final statusCode = event.response?.status_code;
       final reason = event.response?.reason_phrase;
-      logger.w('hold re-INVITE failed: $statusCode $reason — '
-          'rolling back, call stays active');
+      logger.w('hold re-INVITE failed: $statusCode $reason '
+          '(autoRetry=$isAutoRetry) — rolling back, call stays active');
       _localHold = false;
       _onunhold('local');
+
+      if (statusCode == 491 && !isAutoRetry) {
+        logger.i('hold() got 491 Request Pending — auto-retry in 5s '
+            '(RFC 3261 §14.1)');
+        _glareRetryTimer?.cancel();
+        _glareRetryTimer = Timer(const Duration(seconds: 5), () {
+          _glareRetryTimer = null;
+          logger.i('hold() auto-retry firing now');
+          _holdInternal(options, done, isAutoRetry: true);
+        });
+        // НЕ вызываем done() — caller узнает результат после retry.
+        return;
+      }
+
       if (done != null) {
         done(event.response);
       }
@@ -1181,7 +1221,20 @@ class RTCSession extends EventManager implements Owner {
 
   bool unhold(
       [Map<String, dynamic>? options, Function(IncomingMessage?)? done]) {
-    logger.d('unhold()');
+    return _unholdInternal(options, done, isAutoRetry: false);
+  }
+
+  bool _unholdInternal(
+    Map<String, dynamic>? options,
+    Function(IncomingMessage?)? done, {
+    required bool isAutoRetry,
+  }) {
+    logger.d('unhold() (autoRetry=$isAutoRetry)');
+
+    if (!isAutoRetry) {
+      _glareRetryTimer?.cancel();
+      _glareRetryTimer = null;
+    }
 
     options = options ?? <String, dynamic>{};
 
@@ -1207,16 +1260,27 @@ class RTCSession extends EventManager implements Owner {
       }
     });
     handlers.on(EventCallFailed(), (EventCallFailed event) {
-      // Симметрично hold() — НЕ terminate'им звонок при провале
-      // unhold-re-INVITE'а. Откатываем `_localHold = true` обратно,
-      // эмитим `_onhold('local')`, звонок остаётся в hold-state.
-      // Оператор может попробовать unhold ещё раз.
+      // Симметрично hold() — rollback + auto-retry на 491. См. подробный
+      // комментарий в _holdInternal.
       final statusCode = event.response?.status_code;
       final reason = event.response?.reason_phrase;
-      logger.w('unhold re-INVITE failed: $statusCode $reason — '
-          'rolling back, call stays on hold');
+      logger.w('unhold re-INVITE failed: $statusCode $reason '
+          '(autoRetry=$isAutoRetry) — rolling back, call stays on hold');
       _localHold = true;
       _onhold('local');
+
+      if (statusCode == 491 && !isAutoRetry) {
+        logger.i('unhold() got 491 Request Pending — auto-retry in 5s '
+            '(RFC 3261 §14.1)');
+        _glareRetryTimer?.cancel();
+        _glareRetryTimer = Timer(const Duration(seconds: 5), () {
+          _glareRetryTimer = null;
+          logger.i('unhold() auto-retry firing now');
+          _unholdInternal(options, done, isAutoRetry: true);
+        });
+        return;
+      }
+
       if (done != null) {
         done(event.response);
       }
@@ -1695,6 +1759,8 @@ class RTCSession extends EventManager implements Owner {
     clearTimeout(_timers.userNoAnswerTimer);
     _iceRestartDebounceTimer?.cancel();
     _iceRestartDebounceTimer = null;
+    _glareRetryTimer?.cancel();
+    _glareRetryTimer = null;
 
     // Clear Session Timers.
     clearTimeout(_sessionTimers.timer);
