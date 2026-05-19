@@ -1169,11 +1169,12 @@ class RTCSession extends EventManager implements Owner {
       // звонок убивается. Сейчас НЕ terminate'им — откатываем state,
       // звонок продолжается на оригинальном RTP.
       //
-      // Дополнительно: если 491 И это первая попытка (не retry), —
-      // через 5 сек автоматически повторяем hold. К этому моменту
-      // встречная in-flight tx гарантированно завершилась, retry
-      // обычно проходит. Если retry тоже даст 491 — больше не
-      // пытаемся, передаём response через done().
+      // Дополнительно: если 491 — через 5 сек автоматически повторяем
+      // hold. ТЗ §4-5: пока в ответ приходит 491, циклим бесконечно
+      // (goto 3 → 4); выход из цикла только на 200 OK (EventSucceeded
+      // handler выше) либо на другой не-2xx final response (передаём
+      // через done()) либо на terminate (где _glareRetryTimer
+      // отменяется в _close).
       final statusCode = event.response?.status_code;
       final reason = event.response?.reason_phrase;
       logger.w('hold re-INVITE failed: $statusCode $reason '
@@ -1181,9 +1182,9 @@ class RTCSession extends EventManager implements Owner {
       _localHold = false;
       _onunhold('local');
 
-      if (statusCode == 491 && !isAutoRetry) {
+      if (statusCode == 491) {
         logger.i('hold() got 491 Request Pending — auto-retry in 5s '
-            '(RFC 3261 §14.1)');
+            '(RFC 3261 §14.1, ТЗ §4.1-5)');
         _glareRetryTimer?.cancel();
         _glareRetryTimer = Timer(const Duration(seconds: 5), () {
           _glareRetryTimer = null;
@@ -1269,9 +1270,11 @@ class RTCSession extends EventManager implements Owner {
       _localHold = true;
       _onhold('local');
 
-      if (statusCode == 491 && !isAutoRetry) {
+      if (statusCode == 491) {
+        // ТЗ §4.1-5: на 491 циклим бесконечно через 5с; выход — 200 OK
+        // или другой не-2xx final response или terminate.
         logger.i('unhold() got 491 Request Pending — auto-retry in 5s '
-            '(RFC 3261 §14.1)');
+            '(RFC 3261 §14.1, ТЗ §4.1-5)');
         _glareRetryTimer?.cancel();
         _glareRetryTimer = Timer(const Duration(seconds: 5), () {
           _glareRetryTimer = null;
