@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
-import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:sdp_transform/sdp_transform.dart' as sdp_transform;
 import 'package:sdp_transform/sdp_transform.dart';
@@ -134,7 +133,7 @@ class RTCSession extends EventManager implements Owner {
   ///   • call terminate.
   Timer? _glareRetryTimer;
 
-  /// DEBUG-ONLY: задержка перед обработкой входящего in-dialog INVITE
+  /// Test-hook: задержка перед обработкой входящего in-dialog INVITE
   /// (`_receiveReinvite`). Если задано, «замораживаем» серверный
   /// re-INVITE на N мс — серверная INVITE tx остаётся in-flight. В этом
   /// окне если клиент сам инициирует re-INVITE (hold/unhold), сервер
@@ -142,27 +141,18 @@ class RTCSession extends EventManager implements Owner {
   /// тестовым виджетом scc_sip_test для воспроизведения glare-сценария
   /// без серверной конфигурации (см. шаг `triggerGlare491`).
   ///
-  /// В release-сборке setter — no-op, проверка в `_receiveReinvite`
-  /// обёрнута в `kDebugMode` → tree-shaker удаляет ветку.
-  int? _debugDelayIncomingReinviteMs;
-  int? get debugDelayIncomingReinviteMs => _debugDelayIncomingReinviteMs;
-  set debugDelayIncomingReinviteMs(int? value) {
-    if (!kDebugMode) return;
-    _debugDelayIncomingReinviteMs = value;
-  }
+  /// В прод-коде поле никем не выставляется — `null` по умолчанию,
+  /// проверка в `_receiveReinvite` сразу пропускает. Работает в любой
+  /// сборке (debug/profile/release).
+  int? debugDelayIncomingReinviteMs;
 
-  /// DEBUG-ONLY: one-shot триггер — при следующем in-dialog INVITE от
+  /// Test-hook: one-shot триггер — при следующем in-dialog INVITE от
   /// сервера автоматически инициируем `hold()` ИЗ обработчика входящего
   /// re-INVITE'а (пока он спит из-за [debugDelayIncomingReinviteMs]).
   /// После срабатывания флаг сбрасывается. Используется совместно с
   /// `debugDelayIncomingReinviteMs` для гарантированного попадания в
-  /// glare-окно. Игнорируется в release.
-  bool _debugAutoHoldOnNextReinvite = false;
-  bool get debugAutoHoldOnNextReinvite => _debugAutoHoldOnNextReinvite;
-  set debugAutoHoldOnNextReinvite(bool value) {
-    if (!kDebugMode) return;
-    _debugAutoHoldOnNextReinvite = value;
-  }
+  /// glare-окно. Работает в любой сборке.
+  bool debugAutoHoldOnNextReinvite = false;
 
   /// One in-dialog client re-INVITE at a time **for this session** (RFC 3261).
   /// UA-global serialization wrongly blocked re-INVITEs on other dialogs sharing
@@ -2338,28 +2328,28 @@ class RTCSession extends EventManager implements Owner {
   void _receiveReinvite(IncomingRequest request) async {
     logger.d('receiveReinvite()');
 
-    // DEBUG-ONLY glare-trap для scc_sip_test (см. поля
-    // `_debugDelayIncomingReinviteMs` / `_debugAutoHoldOnNextReinvite`).
-    // В release-сборке ветка вырезается tree-shaker'ом по kDebugMode.
-    if (kDebugMode && _debugDelayIncomingReinviteMs != null) {
-      final int delayMs = _debugDelayIncomingReinviteMs!;
-      logger.w('receiveReinvite() | DEBUG: delaying $delayMs ms before '
+    // Test-hook glare-trap для scc_sip_test (см. поля
+    // `debugDelayIncomingReinviteMs` / `debugAutoHoldOnNextReinvite`).
+    // В прод-коде никем не выставляется → проверка пропускает.
+    if (debugDelayIncomingReinviteMs != null) {
+      final int delayMs = debugDelayIncomingReinviteMs!;
+      logger.w('receiveReinvite() | TEST: delaying $delayMs ms before '
           'processing (glare-trap)');
       // Если auto-hold вооружён — стартуем client-side hold пока спим,
       // чтобы наш re-INVITE улетел в окне когда серверная tx в полёте.
-      if (_debugAutoHoldOnNextReinvite) {
-        _debugAutoHoldOnNextReinvite = false;
+      if (debugAutoHoldOnNextReinvite) {
+        debugAutoHoldOnNextReinvite = false;
         // Microtask, чтобы не блокировать текущий call-stack.
         scheduleMicrotask(() {
           if (_status == C.STATUS_TERMINATED) return;
-          logger.w('receiveReinvite() | DEBUG: auto-triggering hold() '
+          logger.w('receiveReinvite() | TEST: auto-triggering hold() '
               'inside delay window (glare-trap)');
           hold();
         });
       }
       await Future<void>.delayed(Duration(milliseconds: delayMs));
       if (_status == C.STATUS_TERMINATED) {
-        logger.w('receiveReinvite() | DEBUG: session terminated during '
+        logger.w('receiveReinvite() | TEST: session terminated during '
             'delay, aborting');
         return;
       }
