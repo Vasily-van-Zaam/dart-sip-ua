@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:sdp_transform/sdp_transform.dart' as sdp_transform;
 import 'package:sdp_transform/sdp_transform.dart';
@@ -132,6 +133,36 @@ class RTCSession extends EventManager implements Owner {
   ///     старый retry, выполняем свежую;
   ///   • call terminate.
   Timer? _glareRetryTimer;
+
+  /// DEBUG-ONLY: задержка перед обработкой входящего in-dialog INVITE
+  /// (`_receiveReinvite`). Если задано, «замораживаем» серверный
+  /// re-INVITE на N мс — серверная INVITE tx остаётся in-flight. В этом
+  /// окне если клиент сам инициирует re-INVITE (hold/unhold), сервер
+  /// видит glare и шлёт реальный `491 Request Pending`. Используется
+  /// тестовым виджетом scc_sip_test для воспроизведения glare-сценария
+  /// без серверной конфигурации (см. шаг `triggerGlare491`).
+  ///
+  /// В release-сборке setter — no-op, проверка в `_receiveReinvite`
+  /// обёрнута в `kDebugMode` → tree-shaker удаляет ветку.
+  int? _debugDelayIncomingReinviteMs;
+  int? get debugDelayIncomingReinviteMs => _debugDelayIncomingReinviteMs;
+  set debugDelayIncomingReinviteMs(int? value) {
+    if (!kDebugMode) return;
+    _debugDelayIncomingReinviteMs = value;
+  }
+
+  /// DEBUG-ONLY: one-shot триггер — при следующем in-dialog INVITE от
+  /// сервера автоматически инициируем `hold()` ИЗ обработчика входящего
+  /// re-INVITE'а (пока он спит из-за [debugDelayIncomingReinviteMs]).
+  /// После срабатывания флаг сбрасывается. Используется совместно с
+  /// `debugDelayIncomingReinviteMs` для гарантированного попадания в
+  /// glare-окно. Игнорируется в release.
+  bool _debugAutoHoldOnNextReinvite = false;
+  bool get debugAutoHoldOnNextReinvite => _debugAutoHoldOnNextReinvite;
+  set debugAutoHoldOnNextReinvite(bool value) {
+    if (!kDebugMode) return;
+    _debugAutoHoldOnNextReinvite = value;
+  }
 
   /// One in-dialog client re-INVITE at a time **for this session** (RFC 3261).
   /// UA-global serialization wrongly blocked re-INVITEs on other dialogs sharing
@@ -2306,6 +2337,34 @@ class RTCSession extends EventManager implements Owner {
   /// In dialog INVITE Reception
   void _receiveReinvite(IncomingRequest request) async {
     logger.d('receiveReinvite()');
+
+    // DEBUG-ONLY glare-trap для scc_sip_test (см. поля
+    // `_debugDelayIncomingReinviteMs` / `_debugAutoHoldOnNextReinvite`).
+    // В release-сборке ветка вырезается tree-shaker'ом по kDebugMode.
+    if (kDebugMode && _debugDelayIncomingReinviteMs != null) {
+      final int delayMs = _debugDelayIncomingReinviteMs!;
+      logger.w('receiveReinvite() | DEBUG: delaying $delayMs ms before '
+          'processing (glare-trap)');
+      // Если auto-hold вооружён — стартуем client-side hold пока спим,
+      // чтобы наш re-INVITE улетел в окне когда серверная tx в полёте.
+      if (_debugAutoHoldOnNextReinvite) {
+        _debugAutoHoldOnNextReinvite = false;
+        // Microtask, чтобы не блокировать текущий call-stack.
+        scheduleMicrotask(() {
+          if (_status == C.STATUS_TERMINATED) return;
+          logger.w('receiveReinvite() | DEBUG: auto-triggering hold() '
+              'inside delay window (glare-trap)');
+          hold();
+        });
+      }
+      await Future<void>.delayed(Duration(milliseconds: delayMs));
+      if (_status == C.STATUS_TERMINATED) {
+        logger.w('receiveReinvite() | DEBUG: session terminated during '
+            'delay, aborting');
+        return;
+      }
+    }
+
     String? contentType = request.getHeader('Content-Type');
 
     void sendAnswer(String? sdp) async {
