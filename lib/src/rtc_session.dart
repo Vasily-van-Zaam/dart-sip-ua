@@ -2331,14 +2331,17 @@ class RTCSession extends EventManager implements Owner {
     // Test-hook glare-trap для scc_sip_test (см. поля
     // `debugDelayIncomingReinviteMs` / `debugAutoHoldOnNextReinvite`).
     // В прод-коде никем не выставляется → проверка пропускает.
+    // ОБЕ переменные one-shot: сбрасываются ДО начала задержки, чтобы
+    // последующие серверные re-INVITE'ы (refresh #2, #3 каждые ~60с)
+    // и сценарийный `hangupMainCall` обрабатывались без артефактов.
     if (debugDelayIncomingReinviteMs != null) {
       final int delayMs = debugDelayIncomingReinviteMs!;
+      final bool autoHold = debugAutoHoldOnNextReinvite;
+      debugDelayIncomingReinviteMs = null;
+      debugAutoHoldOnNextReinvite = false;
       logger.w('receiveReinvite() | TEST: delaying $delayMs ms before '
-          'processing (glare-trap)');
-      // Если auto-hold вооружён — стартуем client-side hold пока спим,
-      // чтобы наш re-INVITE улетел в окне когда серверная tx в полёте.
-      if (debugAutoHoldOnNextReinvite) {
-        debugAutoHoldOnNextReinvite = false;
+          'processing (glare-trap, one-shot consumed)');
+      if (autoHold) {
         // Microtask, чтобы не блокировать текущий call-stack.
         scheduleMicrotask(() {
           if (_status == C.STATUS_TERMINATED) return;
