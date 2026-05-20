@@ -4089,6 +4089,28 @@ class RTCSession extends EventManager implements Owner {
   }
 
   void _toggleMuteAudio(bool mute) {
+    // Применяем `track.enabled` на ВСЕХ источниках:
+    // 1) Sender'ы peerConnection — это «истина» WebRTC. После replaceTrack
+    //    (hot-swap микрофона в flutter_webrtc_fork
+    //    `feat/audio-0.35.0-hot-swap`) именно sender держит активный
+    //    track, а `_localMediaStream` остаётся ссылкой на старый.
+    //    Без этого mute/unmute не управляют реальным передаваемым audio
+    //    после hot-swap → юзер мутит, но собеседник всё ещё слышит.
+    //    Fire-and-forget (track.enabled идемпотентен, race не страшен).
+    // 2) `_localMediaStream` — историческая ссылка, оставляем для
+    //    случая когда peerConnection ещё null (до первого setup).
+    final pc = _connection;
+    if (pc != null) {
+      // ignore: avoid_dynamic_calls
+      pc.getSenders().then((senders) {
+        for (final s in senders) {
+          final t = s.track;
+          if (t != null && t.kind == 'audio') {
+            t.enabled = !mute;
+          }
+        }
+      }).catchError((_) {});
+    }
     if (_localMediaStream != null) {
       for (MediaStreamTrack track in _localMediaStream!.getAudioTracks()) {
         track.enabled = !mute;
