@@ -705,4 +705,14 @@ class _MyCallScreenWidget extends State<CallScreenWidget>
   void onNewNotify(Notify ntf) {
     // NO OP
   }
+
+  @override
+  void callTransportDegraded(int attempt) {
+    // NO OP
+  }
+
+  @override
+  void callTransportRecovered() {
+    // NO OP
+  }
 }

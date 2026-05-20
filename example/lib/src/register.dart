@@ -313,4 +313,14 @@ class _MyRegisterWidget extends State<RegisterWidget>
   void onNewReinvite(ReInvite event) {
     // TODO: implement onNewReinvite
   }
+
+  @override
+  void callTransportDegraded(int attempt) {
+    // NO OP
+  }
+
+  @override
+  void callTransportRecovered() {
+    // NO OP
+  }
 }

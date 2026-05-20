@@ -33,3 +33,18 @@ class EventSocketReconnectFailed extends EventType {
   EventSocketReconnectFailed({this.attempts = 0});
   int attempts;
 }
+
+/// In-call keepalive OPTIONS — первая попытка не получила ответа в срок.
+/// Socket формально ещё CONNECTED, но трафик не идёт. Раннее предупреждение
+/// для UI («связь нездорова») до того как sip_ua убьёт звонок по RTP Timeout
+/// и до фактического DISCONNECT транспорта.
+class EventCallKeepAliveDegraded extends EventType {
+  EventCallKeepAliveDegraded({this.attempt = 1});
+  int attempt;
+}
+
+/// In-call keepalive восстановился после серии degraded — получили 200 OK
+/// (или любой SIP-ответ) на повторный OPTIONS. UI снимает «нездоровое» состояние.
+class EventCallKeepAliveRecovered extends EventType {
+  EventCallKeepAliveRecovered();
+}

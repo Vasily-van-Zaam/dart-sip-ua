@@ -174,6 +174,11 @@ class UA extends EventManager {
   Timer? _callKeepAliveResponseTimer;
   Options? _callKeepAliveInFlight;
   int _callKeepAliveAttempt = 0;
+
+  /// Эмитим [EventCallKeepAliveDegraded] один раз на серию miss'ов,
+  /// чтобы UI поднял баннер «связь нездорова» сразу же. Снимаем флаг
+  /// в _onCallKeepAliveSuccess() — там же эмитим [EventCallKeepAliveRecovered].
+  bool _callKeepAliveDegradedEmitted = false;
   Timer? _postReconnectRegisterTimer;
   bool _pendingPostReconnectRegister = false;
 
@@ -1217,6 +1222,12 @@ class UA extends EventManager {
     } catch (_) {}
     _callKeepAliveInFlight = null;
     _callKeepAliveAttempt = 0;
+    // Если останавливаемся в degraded-состоянии (например, звонок закончен
+    // во время серии fail'ов) — не оставляем UI висеть с «нездоровой» меткой.
+    if (_callKeepAliveDegradedEmitted) {
+      _callKeepAliveDegradedEmitted = false;
+      emit(EventCallKeepAliveRecovered());
+    }
   }
 
   void _checkCallKeepAlive() {
@@ -1311,6 +1322,11 @@ class UA extends EventManager {
     // attempt counter and timer are reset by _restartCallKeepAliveTimer()
     // called from onTransportData() when the 200 OK arrives.
     logger.d('Call keepalive OPTIONS succeeded');
+    if (_callKeepAliveDegradedEmitted) {
+      _callKeepAliveDegradedEmitted = false;
+      logger.w('Call keepalive recovered — transport is healthy again');
+      emit(EventCallKeepAliveRecovered());
+    }
   }
 
   void _onCallKeepAliveFailure() {
@@ -1324,6 +1340,15 @@ class UA extends EventManager {
     final int maxAttempts = _configuration.call_keep_alive_max_attempts > 0
         ? _configuration.call_keep_alive_max_attempts
         : 3;
+
+    // Первый fail в серии — раннее предупреждение для UI/handler,
+    // звонок ещё жив (~10-15с до RTP Timeout). См. EventCallKeepAliveDegraded.
+    if (!_callKeepAliveDegradedEmitted) {
+      _callKeepAliveDegradedEmitted = true;
+      logger.w('Call keepalive degraded — first miss, emitting early signal '
+          '(call still alive)');
+      emit(EventCallKeepAliveDegraded(attempt: _callKeepAliveAttempt));
+    }
 
     if (_callKeepAliveAttempt >= maxAttempts) {
       logger.w('Call keepalive failed $_callKeepAliveAttempt/$maxAttempts — '

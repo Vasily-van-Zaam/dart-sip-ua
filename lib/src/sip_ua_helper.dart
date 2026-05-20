@@ -245,6 +245,16 @@ class SIPUAHelper extends EventManager {
             cause: event.cause));
       });
 
+      _ua!.on(EventCallKeepAliveDegraded(), (EventCallKeepAliveDegraded event) {
+        logger.w('callTransportDegraded attempt=${event.attempt}');
+        _notifyCallTransportDegraded(event.attempt);
+      });
+
+      _ua!.on(EventCallKeepAliveRecovered(), (EventCallKeepAliveRecovered _) {
+        logger.w('callTransportRecovered');
+        _notifyCallTransportRecovered();
+      });
+
       _ua!.on(EventRegistered(), (EventRegistered event) {
         logger.d('registered => ${event.cause}');
         _registerState = RegistrationState(
@@ -486,6 +496,20 @@ class SIPUAHelper extends EventManager {
     List<SipUaHelperListener> listeners = _sipUaHelperListeners.toList();
     for (SipUaHelperListener listener in listeners) {
       listener.transportStateChanged(state);
+    }
+  }
+
+  void _notifyCallTransportDegraded(int attempt) {
+    List<SipUaHelperListener> listeners = _sipUaHelperListeners.toList();
+    for (SipUaHelperListener listener in listeners) {
+      listener.callTransportDegraded(attempt);
+    }
+  }
+
+  void _notifyCallTransportRecovered() {
+    List<SipUaHelperListener> listeners = _sipUaHelperListeners.toList();
+    for (SipUaHelperListener listener in listeners) {
+      listener.callTransportRecovered();
     }
   }
 
@@ -830,6 +854,17 @@ abstract class SipUaHelperListener {
   void onNewMessage(SIPMessageRequest msg);
   void onNewNotify(Notify ntf);
   void onNewReinvite(ReInvite event);
+
+  /// In-call keepalive обнаружил пропажу трафика на уже установленном
+  /// сокете (первый OPTIONS-таймаут в серии). Звонок ещё жив (RTP Timeout
+  /// придёт через ~10-15с), но UI должен сразу показать «связь нездорова»,
+  /// чтобы оператор успел сообщить абоненту. Default no-op для обратной
+  /// совместимости — старые listener'ы продолжают работать.
+  void callTransportDegraded(int attempt) {}
+
+  /// Keepalive восстановился после серии fail'ов — UI снимает «нездоровое»
+  /// состояние. Default no-op.
+  void callTransportRecovered() {}
 }
 
 class Notify {
