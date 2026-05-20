@@ -2625,16 +2625,47 @@ class RTCSession extends EventManager implements Owner {
       }
       return null;
     }
+
+    // RFC 3261 §14.2: UAS-side glare — у нас уже есть local offer в полёте
+    // (наш собственный hold/unhold re-INVITE сейчас в createOffer/SLD), и
+    // тут же приходит remote offer (серверный session-refresh или REFER).
+    // setRemoteDescription в этом состоянии не работает («have-local-offer»),
+    // и раньше мы отвечали 488 — это ломало тестовый сценарий «suspend if 491»
+    // и реальные refresh-сценарии. Корректный ответ — 491 Request Pending,
+    // сервер сам перезапустит свой INVITE после нашего ACK.
+    final RTCSignalingState? sigState = _connection?.signalingState;
+    if (sigState != null &&
+        sigState != RTCSignalingState.RTCSignalingStateStable) {
+      logger.w(
+          're-INVITE: UAS-glare (signalingState=$sigState) — отвечаем 491 Request Pending');
+      try {
+        request.reply(491, null, <dynamic>['Retry-After: 2']);
+      } catch (e, st) {
+        logger.e('reply(491) on UAS-glare failure: $e\n$st');
+      }
+      return null;
+    }
+
     try {
       await _connection!.setRemoteDescription(offer);
     } catch (error) {
+      // Race: signalingState мог стать non-stable прямо во время setRemoteDescription
+      // (наш own createOffer/SLD завершился между check'ом выше и этим catch).
+      // Текст ошибки от libwebrtc/native стабильно содержит «have-local-offer»
+      // или «wrong state» — это glare, отвечаем 491.
+      final String errStr = error.toString();
+      final bool isGlare =
+          errStr.contains('have-local-offer') || errStr.contains('wrong state');
+      final int replyCode = isGlare ? 491 : 488;
+      final List<dynamic>? extra = isGlare ? <dynamic>['Retry-After: 2'] : null;
       try {
-        request.reply(488);
+        request.reply(replyCode, null, extra);
       } catch (e, st) {
-        logger.e('reply(488) after setRemoteDescription failure: $e\n$st');
+        logger
+            .e('reply($replyCode) after setRemoteDescription failure: $e\n$st');
       }
       logger.e(
-          'emit "peerconnection:setremotedescriptionfailed" [error:${error.toString()}]');
+          'emit "peerconnection:setremotedescriptionfailed" [error:${error.toString()}] reply=$replyCode glare=$isGlare');
 
       emit(EventSetRemoteDescriptionFailed(exception: error));
 
