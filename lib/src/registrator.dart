@@ -222,10 +222,31 @@ class Registrator {
                 contact.getParam('pub-gruu').replaceAll('"', '');
           }
 
-          if (!_registered) {
-            _registered = true;
-            _ua.registered(response: event.response);
-          }
+          // INTENTIONAL DEVIATION от JsSIP-семантики (см. upstream guard
+          // `if (!_registered)`): эмитим EventRegistered на КАЖДОМ 200 OK на
+          // REGISTER, а не только на первом (transition unregistered→registered).
+          //
+          // Зачем: registrationStateChanged listener'ы (sip_service.dart) иначе
+          // не узнают о refresh-циклах (~каждые expires-5 сек), и UI-state может
+          // рассинхрониться с реальностью — например, залипший
+          // `SipConnectionStatusEnum.disconnected` от прошлого transport flap'а
+          // или callTransportDegraded без recovered не сбросится. PBX вернул 200 OK
+          // ⇒ транспорт жив ⇒ слушатели должны получить периодический сигнал,
+          // чтобы подтянуть свой стейт.
+          //
+          // Безопасно: `case REGISTERED` в sip_service.dart идемпотентен (emit
+          // того же state, reset retry-timer'ов), `_secondRegistered` флаг защищает
+          // от повторного `firstRegistered`.
+          //
+          // TODO правильная архитектура — отдельный `EventRegistrationRefreshed`,
+          // тогда `EventRegistered` останется чистым transition-event'ом, а
+          // refresh будет своим heartbeat-каналом. Требует: новый event class
+          // (`event_manager/register_events.dart`), emit здесь параллельно с
+          // EventRegistered (с guard), подписка в sip_ua_helper.dart, новый
+          // callback `registrationRefreshed` на `SipUaHelperListener`, обработка
+          // в sip_service.dart. ~30 строк, отложено до следующей чистки форка.
+          _registered = true;
+          _ua.registered(response: event.response);
         } else
         // Interval too brief RFC3261 10.2.8.
         if (status_code.contains(RegExp(r'^423$'))) {
@@ -370,8 +391,7 @@ class Registrator {
     setExtraContactUriParams(
         _ua.configuration.register_extra_contact_uri_params);
     _contact += ';reg-id=1';
-    _contact +=
-        ';+sip.instance="<urn:uuid:${_ua.configuration.instance_id}>"';
+    _contact += ';+sip.instance="<urn:uuid:${_ua.configuration.instance_id}>"';
   }
 
   void _registrationFailure(dynamic response, String cause) {
