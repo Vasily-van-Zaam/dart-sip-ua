@@ -238,6 +238,19 @@ class Registrator {
           // того же state, reset retry-timer'ов), `_secondRegistered` флаг защищает
           // от повторного `firstRegistered`.
           //
+          // ⚠️ WARN для consumer'ов EventRegistered: НЕ предполагайте что event
+          // означает transition unregistered→registered. Он также фаерится на
+          // каждый refresh при уже валидной регистрации. Если ваша логика должна
+          // сработать ТОЛЬКО на первой регистрации (например, инкремент счётчика
+          // generations или сброс per-session state), различайте first vs refresh
+          // явно через флаг типа `wasInvalid := !_registered`. Историческая
+          // регрессия из-за нарушения этого правила:
+          //   * `sia_helper_v1.dart:_activeRegistrationGeneration` инкрементил
+          //     generation на каждый EventRegistered (комментарий обещал «first
+          //     after reconnect»), что после этого deviation начало дропать
+          //     hold/unhold события для всех живых звонков через 30с (см. memory
+          //     note про fix/sip-hold-state-sync). Фикс: гард `if (wasInvalid)`.
+          //
           // TODO правильная архитектура — отдельный `EventRegistrationRefreshed`,
           // тогда `EventRegistered` останется чистым transition-event'ом, а
           // refresh будет своим heartbeat-каналом. Требует: новый event class
