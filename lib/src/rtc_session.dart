@@ -1721,6 +1721,16 @@ class RTCSession extends EventManager implements Owner {
     emit(EventNewInfo(originator: originator, info: info, request: request));
   }
 
+  /// Публичный pass-through к [_isReadyToReOffer]. Нужен SIP-сервису
+  /// чтобы перед `hold()`/`unhold()` дождаться окна когда в диалоге
+  /// нет in-flight re-INVITE/UPDATE (FS session-refresh либо собственный
+  /// re-INVITE). Без этой проверки `hold()` синхронно вернёт `false`
+  /// (см. _isReadyToReOffer → returns false при uac/uas_pending_reply),
+  /// и EventCallHold никогда не эмитится — `Call.state` так и остаётся
+  /// CONFIRMED, а оператор не понимает почему «Перевести» не сработало.
+  /// См. fix/sip-hold-state-sync (Sentry SYNERGYCC-4MQ).
+  bool get isReadyToReOffer => _isReadyToReOffer();
+
   /**
    * Check if RTCSession is ready for an outgoing re-INVITE or UPDATE with SDP.
    */
