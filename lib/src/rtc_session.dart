@@ -201,21 +201,9 @@ class RTCSession extends EventManager implements Owner {
   bool _localHold = false;
   bool _remoteHold = false;
 
-  /// Saved sender→track map для replaceTrack(null) mute-варианта.
-  ///
-  /// ⚠️ AEC fix 2026-05-22 (ветка fix/mute-replace-track-aec): чтобы
-  /// avoid'нуть libwebrtc 1.4.x регрессию когда `track.enabled=false`
-  /// заваливает WebRTC AudioProcessing/AGC в "near-silence detected"
-  /// state и портит capture на следующих звонках, на mute мы делаем
-  /// `sender.replaceTrack(null)` (sender отсоединяется от track,
-  /// packets не шлются), сохраняя оригинальный track здесь — capture
-  /// продолжает работать с нормальным AGC state. На unmute берём
-  /// saved track обратно через `sender.replaceTrack(saved)`.
-  ///
-  /// Ключ — `sender.senderId` (стабильный идентификатор RTCRtpSender).
-  /// Очищается на unmute (после успешного restore) и в `close()`.
-  final Map<String, MediaStreamTrack> _savedMutedAudioTracks =
-      <String, MediaStreamTrack>{};
+  // (поле _savedMutedAudioTracks удалено вместе с v2 replaceTrack
+  // подходом — v3 setParameters({active:false}) не требует сохранения
+  // track refs, sender держит track сам.)
 
   late RFC4028Timers _sessionTimers;
 
@@ -1800,12 +1788,8 @@ class RTCSession extends EventManager implements Owner {
       _localMediaStream = null;
     }
 
-    // Clear saved muted audio tracks map — refs больше не нужны после
-    // teardown'а peerConnection (senders gone). Без явного clear на длинных
-    // сессиях накопились бы tracks от закрытых senders. Тут dispose() track
-    // не нужен — _localMediaStream.dispose() выше уже остановил underlying
-    // media-source (наши saved refs указывали на те же tracks).
-    _savedMutedAudioTracks.clear();
+    // (Cleanup _savedMutedAudioTracks удалён — поле больше не используется
+    // после перехода на setParameters({active:false}) подход.)
 
     // Terminate signaling.
 
@@ -4153,38 +4137,33 @@ class RTCSession extends EventManager implements Owner {
   }
 
   void _toggleMuteAudio(bool mute) {
-    // ⚠️ AEC fix 2026-05-22 (ветка fix/mute-replace-track-aec):
+    // ⚠️ AEC fix 2026-05-22, итерация 2 (ветка fix/mute-replace-track-aec):
     //
-    // Старая реализация делала `track.enabled = false` на mute. Это
-    // классический паттерн в WebRTC API, но на libwebrtc 1.4.x он
-    // вызывает регрессию: AudioProcessing/AGC видит near-silence в
-    // capture buffer (track.enabled=false → ADM отдаёт zeros), решает
-    // что это nominal "silent room" → adapt'ит gain ВНИЗ. На unmute
-    // capture возвращается, но AGC уже в low-gain state, и оператор
-    // звучит **тихо/прерывисто** до тех пор пока AGC не оттает (≥ 15
-    // сек). Между звонками state не reset'ится → следующий звонок
-    // **начинается** с broken AGC.
+    // Эволюция подхода:
+    //   v1: track.enabled = false (старый паттерн)
+    //       → AGC видит silence в capture buffer → застревает в low-gain
+    //         state. После unmute голос «глухой/прерывистый», между
+    //         звонками state не reset'ится. Подтверждено win_run_log v1.
+    //   v2: sender.replaceTrack(null)/replaceTrack(saved)
+    //       → AGC fix частично сработал (digital noise после mute ушёл,
+    //         голос чище), но появилась **задержка 3-5 сек** после
+    //         unmute. Причина: replaceTrack rebuild'ит RTP pipeline,
+    //         capture buffer накопленный за время mute play'ится catch-up
+    //         режимом. Подтверждено win_run_log v2.
+    //   v3 (текущая): sender.setParameters({encodings:[{active:false}]})
+    //       → encoder-level disable. Track остаётся на sender, capture
+    //         continues, AGC видит сигнал (AGC fix v2 сохранён). Encoder
+    //         просто перестаёт паковать packets — нет RTP queue. На
+    //         unmute — encoder сразу подхватывает текущий audio frame,
+    //         без catch-up задержки.
     //
-    // Подтверждено логом win_run_log 2026-05-22: 1-й звонок до mute
-    // `media-source.level=0.83` (норм), 2-й звонок после mute/unmute
-    // `level=0.00003` (нижe шумового пола), energy.growth почти 0.
-    //
-    // Правильный паттерн (WebRTC spec) — `sender.replaceTrack(null)`:
-    // sender физически отсоединяется от track, packets не шлются, но
-    // **track остаётся живым** (ref сохраняется через `_localMediaStream`
-    // и наш map ниже), **capture продолжает работать**, AGC видит
-    // нормальный сигнал. На unmute — `sender.replaceTrack(saved)`
-    // возвращает sender к тому же track'у без перезапуска ADM.
-    //
-    // Fire-and-forget — race с new senders (replaceTrack после hot-swap)
-    // не страшен: новый sender по факту получит `enabled` track напрямую
-    // от `_localMediaStream`, mute applies на next toggle.
+    // Это canonical WebRTC pattern для «mute» (см. W3C WebRTC-RTP-Extensions).
+    // Native поддержка: `RtpSenderSetParameters` в flutter_webrtc.cc.
     final pc = _connection;
     if (pc == null) {
-      // peerConnection ещё не готов — fallback на старое поведение
-      // через `_localMediaStream`. На early-stage mute (до setup'а
-      // PC) state не сохраняется в saved map'е, но это безопасно:
-      // при первом setup'е PC уже придёт новый track.
+      // peerConnection ещё не готов — fallback на старое поведение через
+      // `_localMediaStream`. Безопасно: при setup'е PC новый track будет
+      // unmuted (это будет начальное состояние), mute apply на next toggle.
       if (_localMediaStream != null) {
         for (MediaStreamTrack track in _localMediaStream!.getAudioTracks()) {
           track.enabled = !mute;
@@ -4195,41 +4174,31 @@ class RTCSession extends EventManager implements Owner {
     // ignore: avoid_dynamic_calls
     pc.getSenders().then((senders) async {
       for (final s in senders) {
-        final senderId = s.senderId;
-        if (mute) {
-          final t = s.track;
-          if (t == null || t.kind != 'audio') continue;
-          // Сохраняем оригинальный track перед detach.
-          _savedMutedAudioTracks[senderId] = t;
-          try {
-            await s.replaceTrack(null);
-          } catch (e) {
-            logger.w('_toggleMuteAudio mute: replaceTrack(null) failed for '
-                'senderId=$senderId: $e. Fallback to track.enabled=false.');
-            t.enabled = false;
-            _savedMutedAudioTracks.remove(senderId);
+        final t = s.track;
+        if (t == null || t.kind != 'audio') continue;
+        try {
+          final params = s.parameters;
+          final encs = params.encodings;
+          if (encs == null || encs.isEmpty) {
+            // Не должно случаться для активного sender'а — sender без
+            // encodings'ов не может слать packets. Fallback на enabled.
+            logger.w('_toggleMuteAudio: sender ${s.senderId} has no '
+                'encodings, fallback to track.enabled=${!mute}.');
+            t.enabled = !mute;
+            continue;
           }
-        } else {
-          // Восстанавливаем из saved map'а если был mute через
-          // replaceTrack. Если saved нет (например, mute был на
-          // ещё-не-готовом sender, либо track пересоздался) —
-          // fallback на enabled=true для current track.
-          final MediaStreamTrack? saved =
-              _savedMutedAudioTracks.remove(senderId);
-          if (saved != null) {
-            try {
-              await s.replaceTrack(saved);
-            } catch (e) {
-              logger.w(
-                  '_toggleMuteAudio unmute: replaceTrack(saved) failed for '
-                  'senderId=$senderId: $e. Fallback to current track.enabled=true.');
-              final MediaStreamTrack? t = s.track;
-              if (t != null && t.kind == 'audio') t.enabled = true;
-            }
-          } else {
-            final MediaStreamTrack? t = s.track;
-            if (t != null && t.kind == 'audio') t.enabled = true;
+          // Все encodings (обычно одно для audio) выставляем active=!mute.
+          for (final enc in encs) {
+            enc.active = !mute;
           }
+          await s.setParameters(params);
+        } catch (e) {
+          // Если setParameters не поддерживается на платформе/version —
+          // fallback на старое track.enabled поведение. Это лучше чем
+          // полное отсутствие mute'а.
+          logger.w('_toggleMuteAudio setParameters failed for sender '
+              'senderId=${s.senderId}: $e. Fallback to track.enabled=${!mute}.');
+          t.enabled = !mute;
         }
       }
     }).catchError((Object e) {
@@ -4237,9 +4206,9 @@ class RTCSession extends EventManager implements Owner {
     });
     // НЕ трогаем `_localMediaStream.getAudioTracks().enabled` —
     // capture pipeline должен работать **всегда** (это то ради чего
-    // мы и делаем replaceTrack(null) вместо enabled=false). Если
-    // дёрнуть enabled=false на stream-level — это пробросится в native
-    // и AGC снова попадёт в "silent state" корзину.
+    // мы используем encoder-level active flag вместо track.enabled).
+    // Если дёрнуть enabled=false на stream-level — это пробросится в
+    // native и AGC снова попадёт в "silent state" корзину (v1-регрессия).
   }
 
   void _toggleMuteVideo(bool mute) {
