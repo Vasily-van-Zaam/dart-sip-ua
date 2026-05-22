@@ -4137,33 +4137,42 @@ class RTCSession extends EventManager implements Owner {
   }
 
   void _toggleMuteAudio(bool mute) {
-    // ⚠️ AEC fix 2026-05-22, итерация 2 (ветка fix/mute-replace-track-aec):
+    // ⚠️ AEC fix 2026-05-22 эволюция (ветка fix/mute-replace-track-aec):
     //
-    // Эволюция подхода:
-    //   v1: track.enabled = false (старый паттерн)
-    //       → AGC видит silence в capture buffer → застревает в low-gain
-    //         state. После unmute голос «глухой/прерывистый», между
-    //         звонками state не reset'ится. Подтверждено win_run_log v1.
+    //   v1: track.enabled=false (исходный паттерн)
+    //       Privacy ✅ (mute работает) / AGC ❌ (AGC застревает в low-gain
+    //       после mute, между звонками state не reset'ится).
     //   v2: sender.replaceTrack(null)/replaceTrack(saved)
-    //       → AGC fix частично сработал (digital noise после mute ушёл,
-    //         голос чище), но появилась **задержка 3-5 сек** после
-    //         unmute. Причина: replaceTrack rebuild'ит RTP pipeline,
-    //         capture buffer накопленный за время mute play'ится catch-up
-    //         режимом. Подтверждено win_run_log v2.
-    //   v3 (текущая): sender.setParameters({encodings:[{active:false}]})
-    //       → encoder-level disable. Track остаётся на sender, capture
-    //         continues, AGC видит сигнал (AGC fix v2 сохранён). Encoder
-    //         просто перестаёт паковать packets — нет RTP queue. На
-    //         unmute — encoder сразу подхватывает текущий audio frame,
-    //         без catch-up задержки.
+    //       Privacy ✅ / AGC ✅ (capture continues, AGC видит сигнал) /
+    //       Latency ❌ (3-5 сек задержки после unmute из rebuild RTP).
+    //   v3: sender.setParameters({encodings:[{active:false}]})
+    //       Latency ✅ (нет rebuild) / AGC ✅ /
+    //       **Privacy ❌ КРИТИЧНО**: на Win libwebrtc 1.4.x `active`
+    //       для audio encoding фактически noop (известный WebRTC quirk —
+    //       active мыслится для simulcast video). User слышит mute
+    //       визуально, но remote слышит голос. Подтверждено
+    //       win_run_log v3 + операторским тестом 2026-05-22.
+    //   v4 (текущая): HYBRID. setParameters({active:false}) + track.enabled=false.
+    //       Privacy ✅ (track.enabled=false гарантирует block на ВСЕХ
+    //       платформах) / Latency ✅ (нет rebuild) / AGC ⚠️ regression
+    //       (track.enabled=false → ADM видит silence → AGC stuck).
     //
-    // Это canonical WebRTC pattern для «mute» (см. W3C WebRTC-RTP-Extensions).
-    // Native поддержка: `RtpSenderSetParameters` в flutter_webrtc.cc.
+    // Приоритет правок: **privacy > AGC**. Privacy regression — это
+    // утечка конфиденциальности (operator думает что mute, а клиент
+    // слышит), это абсолютный no-go. AGC regression — это качество
+    // голоса (его можно «оттаять» молчанием, не катастрофа). Когда
+    // найдём способ обойти AGC stuck без ломания mute (вероятно через
+    // native patch — track clone + независимый enabled state, либо
+    // ADM reset between calls) — вернём AGC fix.
+    //
+    // setParameters({active:false}) оставлен как best-effort: на
+    // платформах где он работает (macOS возможно, future versions),
+    // AGC regression уйдёт автоматически. На Win пока живём с regression.
     final pc = _connection;
     if (pc == null) {
-      // peerConnection ещё не готов — fallback на старое поведение через
-      // `_localMediaStream`. Безопасно: при setup'е PC новый track будет
-      // unmuted (это будет начальное состояние), mute apply на next toggle.
+      // peerConnection ещё не готов — fallback только через
+      // `_localMediaStream`. На setup'е PC новый track будет unmuted
+      // (нормальное начальное состояние), mute apply на next toggle.
       if (_localMediaStream != null) {
         for (MediaStreamTrack track in _localMediaStream!.getAudioTracks()) {
           track.enabled = !mute;
@@ -4176,39 +4185,49 @@ class RTCSession extends EventManager implements Owner {
       for (final s in senders) {
         final t = s.track;
         if (t == null || t.kind != 'audio') continue;
+        // (1) Гарантия privacy: track.enabled — это **единственный
+        //     надёжный** способ на Win блокировать audio transmission.
+        //     Применяем СНАЧАЛА чтобы не было гонки (active=false noop +
+        //     enabled=true ещё не выставлено = audio течёт).
+        t.enabled = !mute;
+        // (2) Best-effort encoder-level disable. На платформах где это
+        //     работает (track-level enabled может уже там быть учтён
+        //     как же), даёт чище pipeline без silence-feed в AGC.
+        //     На Win — noop, но и не вредит.
         try {
           final params = s.parameters;
           final encs = params.encodings;
-          if (encs == null || encs.isEmpty) {
-            // Не должно случаться для активного sender'а — sender без
-            // encodings'ов не может слать packets. Fallback на enabled.
-            logger.w('_toggleMuteAudio: sender ${s.senderId} has no '
-                'encodings, fallback to track.enabled=${!mute}.');
-            t.enabled = !mute;
-            continue;
+          if (encs != null && encs.isNotEmpty) {
+            for (final enc in encs) {
+              enc.active = !mute;
+            }
+            await s.setParameters(params);
           }
-          // Все encodings (обычно одно для audio) выставляем active=!mute.
-          for (final enc in encs) {
-            enc.active = !mute;
-          }
-          await s.setParameters(params);
         } catch (e) {
-          // Если setParameters не поддерживается на платформе/version —
-          // fallback на старое track.enabled поведение. Это лучше чем
-          // полное отсутствие mute'а.
-          logger.w('_toggleMuteAudio setParameters failed for sender '
-              'senderId=${s.senderId}: $e. Fallback to track.enabled=${!mute}.');
-          t.enabled = !mute;
+          // setParameters fail — track.enabled уже отработал, mute
+          // в безопасности. Логируем для диагностики.
+          logger.d('_toggleMuteAudio setParameters best-effort failed for '
+              'senderId=${s.senderId}: $e (track.enabled уже применён)');
         }
       }
     }).catchError((Object e) {
       logger.w('_toggleMuteAudio getSenders failed: $e');
+      // Fallback: stream-level enabled.
+      if (_localMediaStream != null) {
+        for (MediaStreamTrack track in _localMediaStream!.getAudioTracks()) {
+          track.enabled = !mute;
+        }
+      }
     });
-    // НЕ трогаем `_localMediaStream.getAudioTracks().enabled` —
-    // capture pipeline должен работать **всегда** (это то ради чего
-    // мы используем encoder-level active flag вместо track.enabled).
-    // Если дёрнуть enabled=false на stream-level — это пробросится в
-    // native и AGC снова попадёт в "silent state" корзину (v1-регрессия).
+    // Также применяем на _localMediaStream — historical safety net
+    // для случая когда sender тre-attach'ит track после hot-swap, либо
+    // peerConnection пересоздаётся. Track refs обычно одни и те же,
+    // operation идемпотентна.
+    if (_localMediaStream != null) {
+      for (MediaStreamTrack track in _localMediaStream!.getAudioTracks()) {
+        track.enabled = !mute;
+      }
+    }
   }
 
   void _toggleMuteVideo(bool mute) {
