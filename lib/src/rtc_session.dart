@@ -201,6 +201,13 @@ class RTCSession extends EventManager implements Owner {
   bool _localHold = false;
   bool _remoteHold = false;
 
+  // Timestamp последнего успешного `refer()`. Используется в `_iceRestart`
+  // как guard — после REFER сессия в attended-transfer teardown, server
+  // скоро пришлёт BYE, и наш re-INVITE из ICE restart получит 481 «Call
+  // is being terminated». Сбрасывается auto (по age > 30s) или просто
+  // session terminated. См. project_hold_after_refer_481_race.md.
+  DateTime? _referSentAt;
+
   // (поле _savedMutedAudioTracks удалено вместе с v2 replaceTrack
   // подходом — v3 setParameters({active:false}) не требует сохранения
   // track refs, sender держит track сам.)
@@ -1453,6 +1460,10 @@ class RTCSession extends EventManager implements Owner {
 
     referSubscriber.sendRefer(target, options);
 
+    // Метим timestamp — `_iceRestart` использует его как guard на пост-REFER
+    // окно (session ждёт BYE от server после успешного transfer).
+    _referSentAt = DateTime.now();
+
     // Store in the map.
     int? id = referSubscriber.id;
 
@@ -1909,6 +1920,20 @@ class RTCSession extends EventManager implements Owner {
       return;
     }
 
+    // v2 guard: skip ICE restart если мы только что отправили REFER на эту
+    // сессию. Active consultation-leg в attended transfer (sendrecv) — hold-
+    // guard выше не покрывает. После REFER server ~5-10s закрывает наш leg
+    // через BYE; в это окно _iceRestart на ICE Disconnected (peer-side
+    // ripple) шлёт re-INVITE → 481. См. project_hold_after_refer_481_race.md.
+    if (_referSentAt != null) {
+      final ageMs = DateTime.now().difference(_referSentAt!).inMilliseconds;
+      if (ageMs < 30000) {
+        logger.d(
+            'ICE restart skipped — REFER sent ${ageMs}ms ago (session in transfer teardown)');
+        return;
+      }
+    }
+
     final int baseDebounceMs = 380;
     final int staggerMs =
         _ua.activeSessionCount > 1 ? 120 + (identityHashCode(this) % 520) : 0;
@@ -1924,6 +1949,15 @@ class RTCSession extends EventManager implements Owner {
         logger.d(
             'ICE restart skipped (debounce fired but session on hold local=$_localHold remote=$_remoteHold)');
         return;
+      }
+      // Double-check v2: REFER мог быть отправлен за время debounce.
+      if (_referSentAt != null) {
+        final ageMs = DateTime.now().difference(_referSentAt!).inMilliseconds;
+        if (ageMs < 30000) {
+          logger.d(
+              'ICE restart skipped (debounce fired but REFER sent ${ageMs}ms ago)');
+          return;
+        }
       }
       final Map<String, dynamic> offerConstraints = _rtcOfferConstraints ??
           <String, dynamic>{
