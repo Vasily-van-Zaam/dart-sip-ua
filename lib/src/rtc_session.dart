@@ -1685,14 +1685,24 @@ class RTCSession extends EventManager implements Owner {
   }
 
   void onDialogError([IncomingMessage? dialogErrorResponse]) {
-    logger.e('onDialogError()');
-
-    if (_status == C.STATUS_TERMINATED) {
-      return;
-    }
     final int? code = dialogErrorResponse is IncomingResponse
         ? dialogErrorResponse.status_code
         : null;
+
+    // Если сессия уже terminated (параллельный BYE уже пришёл и обработался) —
+    // это expected race для late-arriving 481/408 на out-of-state re-INVITE.
+    // Не логируем как error и не делаем re-terminate. Типичный сценарий:
+    // attended transfer где после REFER server-side closing наших leg'ов
+    // обгоняет наши последние re-INVITE'ы в полёте. См.
+    // project_hold_after_refer_481_race.md.
+    if (_status == C.STATUS_TERMINATED) {
+      logger.d(
+          'onDialogError() ignored — session already terminated (code=$code, expected race with parallel BYE)');
+      return;
+    }
+
+    logger.e('onDialogError()');
+
     // Dialog layer maps 408/481 to EventOnDialogError — peer cleared the dialog.
     if (code == 481 || code == 408) {
       terminate(<String, dynamic>{
@@ -1885,6 +1895,20 @@ class RTCSession extends EventManager implements Owner {
 
   void _iceRestart() {
     _iceRestartDebounceTimer?.cancel();
+
+    // Skip ICE restart when call is on hold (local or remote). RTP не идёт ни
+    // в одну сторону → ICE-restart бессмыслен. Особо опасно во время attended
+    // transfer: customer-leg на hold пока идёт REFER, peer-side teardown
+    // consultation-leg триггерит ICE Disconnected на customer-leg, _iceRestart
+    // пытается renegotiate → re-INVITE на сессию которую сервер уже считает
+    // завершённой → 481 Call is being terminated → onDialogError шумит в Sentry.
+    // См. project_hold_after_refer_481_race.md.
+    if (_localHold || _remoteHold) {
+      logger.d(
+          'ICE restart skipped — session on hold (local=$_localHold remote=$_remoteHold)');
+      return;
+    }
+
     final int baseDebounceMs = 380;
     final int staggerMs =
         _ua.activeSessionCount > 1 ? 120 + (identityHashCode(this) % 520) : 0;
@@ -1892,6 +1916,13 @@ class RTCSession extends EventManager implements Owner {
         Timer(Duration(milliseconds: baseDebounceMs + staggerMs), () {
       _iceRestartDebounceTimer = null;
       if (_status == C.STATUS_TERMINATED || _connection == null) {
+        return;
+      }
+      // Double-check: hold мог появиться за время debounce (юзер кликнул hold
+      // или peer прислал hold re-INVITE).
+      if (_localHold || _remoteHold) {
+        logger.d(
+            'ICE restart skipped (debounce fired but session on hold local=$_localHold remote=$_remoteHold)');
         return;
       }
       final Map<String, dynamic> offerConstraints = _rtcOfferConstraints ??
