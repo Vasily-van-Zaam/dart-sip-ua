@@ -14,7 +14,7 @@ dependencies:
   flutter_webrtc:
     git:
       url: https://github.com/Vasily-van-Zaam/flutter-webrtc.git
-      ref: fix/stable-1.4.1
+      ref: release/2026-05-26
   intl: ^0.20.1
   logger: ^2.0.2+1
   path: ^1.6.4
