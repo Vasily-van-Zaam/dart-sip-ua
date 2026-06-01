@@ -1286,6 +1286,14 @@ class RTCSession extends EventManager implements Owner {
     _localHold = false;
     _onunhold('local');
 
+    // Сразу синхронизируем локальный audio volume после hold.
+    // Mute в SCC теперь не выключает sender/track, а ставит volume=0,
+    // чтобы RTP продолжал идти тишиной. При unhold важно сохранить
+    // пользовательский mute-state: если оператор всё ещё muted — оставляем
+    // volume=0 и silence RTP; если unmuted — заранее возвращаем volume=1,
+    // чтобы не было окна 500ms-2s до внешнего unmute-refresh.
+    _toggleMuteAudio(_audioMuted);
+
     EventManager handlers = EventManager();
     handlers.on(EventSucceeded(), (EventSucceeded event) {
       if (done != null) {
@@ -4202,47 +4210,56 @@ class RTCSession extends EventManager implements Owner {
   }
 
   void _toggleMuteAudio(bool mute) {
-    // ⚠️ ROLLBACK 2026-05-22 (после v4): возвращаем оригинальное
-    // поведение — `track.enabled = !mute`.
+    final double volume = mute ? 0.0 : 1.0;
+
+    // SCC Windows audio policy:
+    //   * НЕ делаем `track.enabled=false` для audio mute.
+    //   * `mediaStreamTrackSetEnable(false)` на Windows/libwebrtc может
+    //     остановить outbound RTP для основного active incoming call.
+    //     При долгом mute/hold сервер видит отсутствие media и может
+    //     потерять вызов.
+    //   * Вместо этого оставляем sender/track live+enabled и глушим
+    //     payload через RTCAudioTrack::SetVolume(0). Так RTP должен
+    //     продолжать идти как silence, как уже наблюдалось на неосновных
+    //     звонках.
     //
-    // История экспериментов и почему откатились:
-    //   v1 (origin): track.enabled=false. AGC stuck regression (известно).
-    //   v2: sender.replaceTrack(null/saved). Дал 3-5 сек задержки от
-    //       rebuild RTP pipeline. ❌
-    //   v3: sender.setParameters({active:false}). На Win libwebrtc
-    //       audio active=false фактически noop → mute визуальный, но
-    //       remote слышит. ❌ Privacy violation.
-    //   v4: hybrid track.enabled + setParameters. Сломал receiver
-    //       playback — incoming звук пропал, лечилось только через
-    //       hold/unhold (sendReinvite recovers). ❌ Звонок неработоспособен.
-    //
-    // Текущее: голый track.enabled=!mute. AGC regression вернётся, но
-    // mute гарантированно работает + receiver playback не ломается.
-    // AGC fix будем делать через native patch отдельно, без touching
-    // mute API.
-    //
-    // 1) Sender'ы peerConnection — «истина» WebRTC. После replaceTrack
-    //    (hot-swap микрофона в flutter_webrtc_fork) sender держит активный
-    //    track, а `_localMediaStream` — старый ref. Без этого mute/unmute
-    //    не управляют реальным передаваемым audio после hot-swap.
-    // 2) `_localMediaStream` — историческая ссылка, для случая когда
-    //    peerConnection ещё null (до первого setup).
-    final pc = _connection;
+    // Важно: это не MF/ADM rebind, не вызывает SetRecordingDevice и не
+    // должно плодить mfksproxy.dll worker threads.
+    final RTCPeerConnection? pc = _connection;
     if (pc != null) {
       // ignore: avoid_dynamic_calls
-      pc.getSenders().then((senders) {
-        for (final s in senders) {
-          final t = s.track;
+      pc.getSenders().then((List<RTCRtpSender> senders) {
+        int audioSenders = 0;
+        int volumeMutedTracks = 0;
+        for (final RTCRtpSender s in senders) {
+          final MediaStreamTrack? t = s.track;
           if (t != null && t.kind == 'audio') {
-            t.enabled = !mute;
+            audioSenders++;
+            // Если трек был выключен старым кодом/старой сборкой —
+            // возвращаем enabled=true, иначе SetVolume(0) не поможет
+            // сохранить RTP.
+            t.enabled = true;
+            unawaited(Helper.setVolume(volume, t));
+            if (mute) volumeMutedTracks++;
           }
         }
+        logger.d(
+          '_toggleMuteAudio(mute=$mute volume=$volume) peerConnection: '
+          'audioSenders=$audioSenders volumeMuted=$volumeMutedTracks',
+        );
       }).catchError((_) {});
     }
     if (_localMediaStream != null) {
+      int streamTracks = 0;
       for (MediaStreamTrack track in _localMediaStream!.getAudioTracks()) {
-        track.enabled = !mute;
+        streamTracks++;
+        track.enabled = true;
+        unawaited(Helper.setVolume(volume, track));
       }
+      logger.d(
+        '_toggleMuteAudio(mute=$mute volume=$volume) _localMediaStream: '
+        'audioTracks=$streamTracks',
+      );
     }
   }
 
