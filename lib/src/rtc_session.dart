@@ -1184,6 +1184,14 @@ class RTCSession extends EventManager implements Owner {
     _localHold = true;
     _onhold('local');
 
+    // Hold = прекращаем отправку медиа (RFC 3264).
+    // SDP уже будет sendonly через _mangleOffer (вызывается в _sendReinvite
+    // ниже), но этого недостаточно: нужно остановить capture pipeline на
+    // уровне трека. Без этого MF ADM продолжает слать реальные PCM-сэмплы
+    // несмотря на sendonly в SDP — сервер видит media когда не должен, и
+    // при долгом hold может детектировать «media inactivity» неверно.
+    _toggleMuteAudio(true);
+
     EventManager handlers = EventManager();
 
     handlers.on(EventSucceeded(), (EventSucceeded event) {
@@ -4210,42 +4218,38 @@ class RTCSession extends EventManager implements Owner {
   }
 
   void _toggleMuteAudio(bool mute) {
-    final double volume = mute ? 0.0 : 1.0;
-
-    // SCC Windows audio policy:
-    //   * НЕ делаем `track.enabled=false` для audio mute.
-    //   * `mediaStreamTrackSetEnable(false)` на Windows/libwebrtc может
-    //     остановить outbound RTP для основного active incoming call.
-    //     При долгом mute/hold сервер видит отсутствие media и может
-    //     потерять вызов.
-    //   * Вместо этого оставляем sender/track live+enabled и глушим
-    //     payload через RTCAudioTrack::SetVolume(0). Так RTP должен
-    //     продолжать идти как silence, как уже наблюдалось на неосновных
-    //     звонках.
-    //
-    // Важно: это не MF/ADM rebind, не вызывает SetRecordingDevice и не
-    // должно плодить mfksproxy.dll worker threads.
+    // SCC mute policy:
+    //   * `track.enabled = !mute` — стандартный WebRTC mute. На Windows
+    //     libwebrtc MF ADM это единственный надёжный способ остановить
+    //     capture pipeline. `Helper.setVolume(0)` (= RTCAudioTrack::
+    //     SetVolume в микшере) НЕ гарантирует нулевые PCM-сэмплы на
+    //     выходе MF capture → сервер получает не silence, а реальный
+    //     голос с noise floor.
+    //   * Mute НЕ меняет SDP (sendrecv остаётся) — это media-level
+    //     операция, сервер не должен видеть разницы на сигнализации.
+    //   * Hold — отдельно: SDP меняется на sendonly через _mangleOffer,
+    //     и _holdInternal явно вызывает _toggleMuteAudio(true) чтобы
+    //     остановить capture (RFC 3264: hold = нет отправки медиа).
+    //   * На unmute дополнительно вызываем Helper.setVolume(1.0, track)
+    //     — страховка от stale gain после старого кода.
     final RTCPeerConnection? pc = _connection;
     if (pc != null) {
       // ignore: avoid_dynamic_calls
       pc.getSenders().then((List<RTCRtpSender> senders) {
         int audioSenders = 0;
-        int volumeMutedTracks = 0;
         for (final RTCRtpSender s in senders) {
           final MediaStreamTrack? t = s.track;
           if (t != null && t.kind == 'audio') {
             audioSenders++;
-            // Если трек был выключен старым кодом/старой сборкой —
-            // возвращаем enabled=true, иначе SetVolume(0) не поможет
-            // сохранить RTP.
-            t.enabled = true;
-            unawaited(Helper.setVolume(volume, t));
-            if (mute) volumeMutedTracks++;
+            t.enabled = !mute;
+            if (!mute) {
+              unawaited(Helper.setVolume(1.0, t));
+            }
           }
         }
         logger.d(
-          '_toggleMuteAudio(mute=$mute volume=$volume) peerConnection: '
-          'audioSenders=$audioSenders volumeMuted=$volumeMutedTracks',
+          '_toggleMuteAudio(mute=$mute) peerConnection: '
+          'audioSenders=$audioSenders',
         );
       }).catchError((_) {});
     }
@@ -4253,11 +4257,13 @@ class RTCSession extends EventManager implements Owner {
       int streamTracks = 0;
       for (MediaStreamTrack track in _localMediaStream!.getAudioTracks()) {
         streamTracks++;
-        track.enabled = true;
-        unawaited(Helper.setVolume(volume, track));
+        track.enabled = !mute;
+        if (!mute) {
+          unawaited(Helper.setVolume(1.0, track));
+        }
       }
       logger.d(
-        '_toggleMuteAudio(mute=$mute volume=$volume) _localMediaStream: '
+        '_toggleMuteAudio(mute=$mute) _localMediaStream: '
         'audioTracks=$streamTracks',
       );
     }
