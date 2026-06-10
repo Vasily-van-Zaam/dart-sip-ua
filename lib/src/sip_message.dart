@@ -541,13 +541,16 @@ class IncomingRequest extends IncomingMessage {
     List<dynamic> supported = <dynamic>[];
     dynamic to = getHeader('To');
 
-    reason = reason ?? null;
+    // Some malformed or already-torn-down incoming requests can miss To.
+    // Reply construction would crash below, so log and skip the response.
+    if (to == null) {
+      logger.e('IncomingRequest.reply($code): missing To header');
+      return;
+    }
 
-    // Validate code and reason values.
+    // Reason phrases are valid SIP text; validate only the status code here.
     if (code < 100 || code > 699) {
       throw Exceptions.TypeError('Invalid status_code: $code');
-    } else if (reason != null) {
-      throw Exceptions.TypeError('Invalid reason_phrase: $reason');
     }
 
     reason = reason ?? DartSIP_C.REASON_PHRASE[code] ?? '';
@@ -641,8 +644,20 @@ class IncomingRequest extends IncomingMessage {
     IncomingMessage message = IncomingMessage();
     message.data = response;
 
-    server_transaction!.receiveResponse(code, message,
-        onSuccess as void Function()?, onFailure as void Function()?);
+    // Stateful replies can race with transaction cleanup on late in-dialog SIP.
+    // Do not crash the app if the transaction is already gone.
+    final TransactionBase? st = server_transaction;
+    if (st == null) {
+      logger.e(
+        'IncomingRequest.reply($code): server_transaction is null '
+        '(method=${method != null ? SipMethodHelper.getName(method!) : 'null'}); '
+        'cannot send stateful response',
+      );
+      return;
+    }
+
+    st.receiveResponse(code, message, onSuccess as void Function()?,
+        onFailure as void Function()?);
   }
 
   /**
@@ -653,8 +668,8 @@ class IncomingRequest extends IncomingMessage {
   void reply_sl(int code, [String? reason]) {
     List<dynamic> vias = getHeaders('via');
 
-    // Validate code and reason values.
-    if (code == null || (code < 100 || code > 699)) {
+    // Stateless replies also allow a custom reason phrase.
+    if (code < 100 || code > 699) {
       throw Exceptions.TypeError('Invalid status_code: $code');
     }
 

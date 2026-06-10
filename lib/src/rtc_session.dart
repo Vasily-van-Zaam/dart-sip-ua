@@ -2011,7 +2011,20 @@ class RTCSession extends EventManager implements Owner {
       return true;
     }
 
-    RTCSessionDescription? desc = await _processInDialogSdpOffer(request);
+    // A re-INVITE can race with hangup/timeout. The SDP helper returns null
+    // after sending a SIP failure response, so the app does not crash.
+    late final RTCSessionDescription? desc;
+    try {
+      desc = await _processInDialogSdpOffer(request);
+    } catch (error, stackTrace) {
+      logger.e('re-INVITE: in-dialog SDP offer failed '
+          '(SIP response may already be sent): $error\n$stackTrace');
+      return;
+    }
+    if (desc == null) {
+      return;
+    }
+    final RTCSessionDescription reinviteAnswer = desc;
 
     Future<bool> acceptReInvite(dynamic options) async {
       try {
@@ -2019,7 +2032,7 @@ class RTCSession extends EventManager implements Owner {
         if (_state == RtcSessionState.terminated) {
           return false;
         }
-        sendAnswer(desc.sdp);
+        sendAnswer(reinviteAnswer.sdp);
       } catch (error) {
         logger.e('Got anerror on re-INVITE: ${error.toString()}');
       }
@@ -2105,8 +2118,9 @@ class RTCSession extends EventManager implements Owner {
     }
 
     try {
-      RTCSessionDescription desc = await _processInDialogSdpOffer(request);
-      if (_state == RtcSessionState.terminated) return;
+      // UPDATE reuses the same SDP path; null means the SIP failure was handled.
+      RTCSessionDescription? desc = await _processInDialogSdpOffer(request);
+      if (desc == null || _state == RtcSessionState.terminated) return;
       // Send answer.
       sendAnswer(desc.sdp);
     } catch (error) {
@@ -2114,7 +2128,7 @@ class RTCSession extends EventManager implements Owner {
     }
   }
 
-  Future<RTCSessionDescription> _processInDialogSdpOffer(
+  Future<RTCSessionDescription?> _processInDialogSdpOffer(
       IncomingRequest request) async {
     logger.d('_processInDialogSdpOffer()');
 
@@ -2198,23 +2212,42 @@ class RTCSession extends EventManager implements Owner {
         RTCSessionDescription(processedSDP, SdpType.offer.name);
 
     if (_state == RtcSessionState.terminated) {
-      throw Exceptions.InvalidStateError('terminated');
+      // The dialog was already closed before applying the remote offer.
+      try {
+        request.reply(481);
+      } catch (e, st) {
+        logger.e(
+            'reply(481) after terminated (pre setRemoteDescription): $e\n$st');
+      }
+      return null;
     }
     try {
       await _connection!.setRemoteDescription(offer);
     } catch (error) {
-      request.reply(488);
+      // Reject stale or incompatible offers with SIP 488 instead of surfacing
+      // a WebRTC exception as an unhandled Flutter error.
+      try {
+        request.reply(488);
+      } catch (e, st) {
+        logger.e('reply(488) after setRemoteDescription failure: $e\n$st');
+      }
       logger.e(
           'emit "peerconnection:setremotedescriptionfailed" [error:${error.toString()}]');
 
       emit(EventSetRemoteDescriptionFailed(exception: error));
 
-      throw Exceptions.TypeError(
-          'peerconnection.setRemoteDescription() failed');
+      return null;
     }
 
     if (_state == RtcSessionState.terminated) {
-      throw Exceptions.InvalidStateError('terminated');
+      // The call can end while setRemoteDescription awaits native WebRTC.
+      try {
+        request.reply(500);
+      } catch (e, st) {
+        logger.e(
+            'reply(500) after terminated (post setRemoteDescription): $e\n$st');
+      }
+      return null;
     }
 
     if (_remoteHold == true && hold == false) {
@@ -2228,15 +2261,28 @@ class RTCSession extends EventManager implements Owner {
     // Create local description.
 
     if (_state == RtcSessionState.terminated) {
-      throw Exceptions.InvalidStateError('terminated');
+      // The call can also end before we create the local answer SDP.
+      try {
+        request.reply(500);
+      } catch (e, st) {
+        logger.e(
+            'reply(500) after terminated (before createLocalDescription): $e\n$st');
+      }
+      return null;
     }
 
     try {
       return await _createLocalDescription(
           SdpType.answer, _rtcAnswerConstraints);
     } catch (_) {
-      request.reply(500);
-      throw Exceptions.TypeError('_createLocalDescription() failed');
+      // Local answer generation failed; the SIP side gets a failure response
+      // and callers stop processing this in-dialog offer.
+      try {
+        request.reply(500);
+      } catch (e, st) {
+        logger.e('reply(500) after _createLocalDescription failure: $e\n$st');
+      }
+      return null;
     }
   }
 
