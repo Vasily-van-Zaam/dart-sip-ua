@@ -745,7 +745,10 @@ class RTCSession extends EventManager implements Owner {
 
     // Check Session Status.
     if (_state == RtcSessionState.terminated) {
-      throw Exceptions.InvalidStateError(_state.name);
+      // terminate() can be called again by late UI actions or re-INVITE
+      // failure callbacks after the session has already emitted ended.
+      logger.d('terminate() skipped: session already terminated');
+      return;
     }
 
     switch (_state) {
