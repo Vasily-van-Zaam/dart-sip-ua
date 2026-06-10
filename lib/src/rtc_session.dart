@@ -1393,7 +1393,7 @@ class RTCSession extends EventManager implements Owner {
                     status_code: request.status_code,
                     reason_phrase: request.reason_phrase));
           } else {
-            request.reply(403, 'Wrong Status');
+            request.reply(403);
           }
           break;
         case SipMethod.INVITE:
@@ -1404,7 +1404,7 @@ class RTCSession extends EventManager implements Owner {
               _receiveReinvite(request);
             }
           } else {
-            request.reply(403, 'Wrong Status');
+            request.reply(403);
           }
           break;
         case SipMethod.INFO:
@@ -1424,28 +1424,31 @@ class RTCSession extends EventManager implements Owner {
               request.reply(415);
             }
           } else {
-            request.reply(403, 'Wrong Status');
+            request.reply(403);
           }
           break;
         case SipMethod.UPDATE:
           if (_state == RtcSessionState.confirmed) {
             _receiveUpdate(request);
           } else {
-            request.reply(403, 'Wrong Status');
+            request.reply(403);
           }
           break;
         case SipMethod.REFER:
           if (_state == RtcSessionState.confirmed) {
             _receiveRefer(request);
           } else {
-            request.reply(403, 'Wrong Status');
+            request.reply(403);
           }
           break;
         case SipMethod.NOTIFY:
-          if (_state == RtcSessionState.confirmed) {
+          if (_state == RtcSessionState.confirmed ||
+              _state == RtcSessionState.waitingForAnswer ||
+              _state == RtcSessionState.waitingForAck ||
+              _state == RtcSessionState.answered) {
             _receiveNotify(request);
           } else {
-            request.reply(403, 'Wrong Status');
+            request.reply(403);
           }
           break;
         default:
