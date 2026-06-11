@@ -809,7 +809,7 @@ class RTCSession extends EventManager implements Owner {
               'Invalid status_code: $status_code');
         } else if (status_code != null) {
           extraHeaders
-              .add('Reason: SIP ;case=$status_code; text="$reason_phrase"');
+              .add('Reason: SIP ;cause=$status_code; text="$reason_phrase"');
         }
 
         /* RFC 3261 section 15 (Terminating a session):
@@ -1648,14 +1648,76 @@ class RTCSession extends EventManager implements Owner {
     }, Timers.TIMER_H);
   }
 
-  void _iceRestart() async {
-    Map<String, dynamic> offerConstraints = _rtcOfferConstraints ??
-        <String, dynamic>{
-          'mandatory': <String, dynamic>{},
-          'optional': <dynamic>[],
-        };
-    offerConstraints['mandatory']['IceRestart'] = true;
-    renegotiate(options: offerConstraints);
+  bool _iceRestart() {
+    if (_connection == null ||
+        _state == RtcSessionState.terminated ||
+        _state == RtcSessionState.canceled) {
+      return false;
+    }
+
+    // A held leg has no active RTP path; ICE restart there is mostly noise and
+    // can race with transfer teardown. Keep SIP alive and let unhold/remote BYE
+    // drive the next state.
+    if (_localHold || _remoteHold) {
+      logger.d(
+          'ICE restart skipped: session is on hold (local=$_localHold remote=$_remoteHold).');
+      return false;
+    }
+
+    final Map<String, dynamic> offerConstraints =
+        Map<String, dynamic>.from(_rtcOfferConstraints ?? <String, dynamic>{});
+    final Map<String, dynamic> mandatory = <String, dynamic>{};
+    final Object? existingMandatory = offerConstraints['mandatory'];
+    if (existingMandatory is Map) {
+      existingMandatory.forEach((dynamic key, dynamic value) {
+        mandatory[key.toString()] = value;
+      });
+    }
+
+    mandatory['IceRestart'] = true;
+    offerConstraints['mandatory'] = mandatory;
+    offerConstraints['optional'] ??= <dynamic>[];
+
+    final bool started = renegotiate(
+      options: <String, dynamic>{'rtcOfferConstraints': offerConstraints},
+    );
+    if (!started) {
+      logger.d('ICE restart renegotiate skipped: dialog busy or not ready.');
+    }
+    return started;
+  }
+
+  void _scheduleIceFailedRecoveryTimeout() {
+    final int timeoutSec = ua.configuration.iceConnectionFailedRecoveryTimeout;
+    if (timeoutSec <= 0) {
+      logger.w('ICE failed recovery timeout disabled; keeping SIP session.');
+      return;
+    }
+
+    _iceDisconnectTimer?.cancel();
+    _iceDisconnectTimer = Timer(Duration(seconds: timeoutSec), () {
+      _iceDisconnectTimer = null;
+      final RTCIceConnectionState? state = _connection?.iceConnectionState;
+      final bool stillBroken =
+          state == RTCIceConnectionState.RTCIceConnectionStateFailed ||
+              state == RTCIceConnectionState.RTCIceConnectionStateDisconnected;
+
+      if (stillBroken &&
+          _state != RtcSessionState.terminated &&
+          _state != RtcSessionState.canceled) {
+        logger.w('ICE failed recovery timeout fired; terminating SIP session.');
+        _isAttemptingIceRestart = false;
+        terminate(<String, dynamic>{
+          'cause': DartSIP_C.CausesType.RTP_TIMEOUT,
+          'status_code': 408,
+          'reason_phrase': 'ICE Connection Failed'
+        });
+        return;
+      }
+
+      logger.i('ICE failed recovery timeout aborted: state changed to $state.');
+      _isAttemptingIceRestart = false;
+    });
   }
 
   Future<void> _createRTCConnection(Map<String, dynamic> pcConfig,
@@ -1673,11 +1735,33 @@ class RTCSession extends EventManager implements Owner {
       if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
         logger.e('ICE Connection State Failed.');
         _iceDisconnectTimer?.cancel();
-        terminate(<String, dynamic>{
-          'cause': DartSIP_C.CausesType.RTP_TIMEOUT,
-          'status_code': 408,
-          'reason_phrase': 'ICE Connection Failed'
-        });
+        _iceDisconnectTimer = null;
+
+        if (ua.configuration.terminateOnIceConnectionFailed) {
+          terminate(<String, dynamic>{
+            'cause': DartSIP_C.CausesType.RTP_TIMEOUT,
+            'status_code': 408,
+            'reason_phrase': 'ICE Connection Failed'
+          });
+          return;
+        }
+
+        if (_localHold || _remoteHold) {
+          logger
+              .w('ICE failed while session is on hold; suppressing local BYE.');
+          return;
+        }
+
+        if (!_isAttemptingIceRestart) {
+          logger.w('Trying ICE restart before terminating SIP session.');
+          _isAttemptingIceRestart = true;
+          if (!_iceRestart()) {
+            _isAttemptingIceRestart = false;
+          }
+        } else {
+          logger.d('ICE restart already in progress.');
+        }
+        _scheduleIceFailedRecoveryTimeout();
       } else if (state ==
           RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
         logger.w('ICE Connection State Disconnected.');
@@ -1692,7 +1776,9 @@ class RTCSession extends EventManager implements Owner {
                 !_isAttemptingIceRestart) {
               logger.i('Attempting ICE restart after timeout...');
               _isAttemptingIceRestart = true;
-              _iceRestart();
+              if (!_iceRestart()) {
+                _isAttemptingIceRestart = false;
+              }
             } else {
               logger.i('ICE restart aborted (state changed during timer).');
             }

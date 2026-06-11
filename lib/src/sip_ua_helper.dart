@@ -181,6 +181,11 @@ class SIPUAHelper extends EventManager {
     _settings.dtmf_mode = uaSettings.dtmfMode;
     _settings.session_timers = uaSettings.sessionTimers;
     _settings.ice_gathering_timeout = uaSettings.iceGatheringTimeout;
+    _settings.sip_advertise_ice = uaSettings.sipAdvertiseIce;
+    _settings.terminateOnIceConnectionFailed =
+        uaSettings.terminateOnIceConnectionFailed;
+    _settings.iceConnectionFailedRecoveryTimeout =
+        uaSettings.iceConnectionFailedRecoveryTimeout;
     _settings.session_timers_refresh_method =
         uaSettings.sessionTimersRefreshMethodEnum;
     _settings.instance_id = uaSettings.instanceId;
@@ -910,6 +915,18 @@ class UaSettings {
 
   /// ICE Gathering Timeout, default 500ms
   int iceGatheringTimeout = 500;
+
+  /// Advertise ICE in SIP headers (`Supported: ice`, `Contact;+sip.ice` on REGISTER).
+  /// Default false for PBX flows that expect WebRTC SDP ICE but no SIP ICE capability.
+  bool sipAdvertiseIce = false;
+
+  /// Terminate immediately when WebRTC reports ICE failed.
+  /// Default false: try ICE recovery first, then terminate after timeout.
+  bool terminateOnIceConnectionFailed = false;
+
+  /// Seconds to wait for ICE recovery before terminating after failed state.
+  /// Set <= 0 to never auto-terminate from the recovery timer.
+  int iceConnectionFailedRecoveryTimeout = 10;
 
   /// Max interval between recovery connection, default 30 sec
   int connectionRecoveryMaxInterval = 30;

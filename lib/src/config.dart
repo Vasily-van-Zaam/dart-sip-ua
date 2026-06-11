@@ -64,6 +64,22 @@ class Settings {
   /// ICE Gathering Timeout (in millisecond).
   int ice_gathering_timeout = 500;
 
+  /// When true, advertise ICE support in SIP headers/contact params.
+  ///
+  /// WebRTC SDP still contains ICE attributes. This flag only controls SIP
+  /// capability signalling such as `Supported: ice` and `;+sip.ice`.
+  bool sip_advertise_ice = false;
+
+  /// When true, WebRTC ICE `failed` immediately terminates the SIP session.
+  ///
+  /// Keep false for PBX flows where a short media-path flap should get a
+  /// recovery attempt before the app sends BYE and loses the customer.
+  bool terminateOnIceConnectionFailed = false;
+
+  /// Seconds to wait after ICE failed recovery starts before terminating.
+  /// Set <= 0 to keep the SIP session alive and let upper layers decide.
+  int iceConnectionFailedRecoveryTimeout = 10;
+
   /// Call statistics in the log
   bool log_call_statistics = false;
 
@@ -258,6 +274,16 @@ class Checks {
     },
     'ice_gathering_timeout': (Settings src, Settings? dst) {
       dst!.ice_gathering_timeout = src.ice_gathering_timeout;
+    },
+    'sip_advertise_ice': (Settings src, Settings? dst) {
+      dst!.sip_advertise_ice = src.sip_advertise_ice;
+    },
+    'terminateOnIceConnectionFailed': (Settings src, Settings? dst) {
+      dst!.terminateOnIceConnectionFailed = src.terminateOnIceConnectionFailed;
+    },
+    'iceConnectionFailedRecoveryTimeout': (Settings src, Settings? dst) {
+      dst!.iceConnectionFailedRecoveryTimeout =
+          src.iceConnectionFailedRecoveryTimeout;
     },
     'log_call_statistics': (Settings src, Settings? dst) {
       dst!.log_call_statistics = src.log_call_statistics;

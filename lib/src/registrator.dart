@@ -50,8 +50,11 @@ class Registrator {
     // Contact header.
     _contact = _ua.contact.toString();
 
-    // Sip.ice media feature tag (RFC 5768).
-    _contact += ';+sip.ice';
+    // Sip.ice media feature tag (RFC 5768). This is only SIP capability
+    // advertising; WebRTC SDP can still contain ICE attributes when disabled.
+    if (_ua.configuration.sip_advertise_ice) {
+      _contact += ';+sip.ice';
+    }
 
     // Custom headers for REGISTER and un-REGISTER.
     _extraHeaders = ua.configuration.register_extra_headers;
