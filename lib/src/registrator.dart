@@ -363,6 +363,12 @@ class Registrator {
       _registered = false;
       _ua.unregistered();
     }
+
+    // Start a fresh REGISTER transaction chain after transport loss. FreeSWITCH
+    // can process the old WebSocket timeout after the new REGISTER succeeds;
+    // a new Call-ID prevents it from matching that stale socket to us.
+    _call_id = utils.createRandomToken(22);
+    _cseq = 0;
   }
 
   void _registrationFailure(dynamic response, String cause) {
