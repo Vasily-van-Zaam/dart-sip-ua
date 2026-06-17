@@ -236,15 +236,17 @@ class Dialog {
               request.server_transaction!.state ==
                   TransactionState.TERMINATED) {
             uas_pending_reply = false;
-            eventHandlers!.remove(EventStateChanged(), stateChanged);
+            eventHandlers!
+                .remove<EventStateChanged>(EventStateChanged(), stateChanged);
           }
         };
-        eventHandlers!.on(EventStateChanged(), stateChanged);
+        eventHandlers!.on<EventStateChanged>(EventStateChanged(), stateChanged);
       }
 
       // RFC3261 12.2.2 Replace the dialog's remote target URI if the request is accepted.
       if (request.hasHeader('contact')) {
-        eventHandlers!.on(EventStateChanged(), (EventStateChanged state) {
+        eventHandlers!.on<EventStateChanged>(EventStateChanged(),
+            (EventStateChanged state) {
           if (request.server_transaction!.state == TransactionState.ACCEPTED) {
             _remote_target = request.parseHeader('contact').uri;
           }
@@ -253,7 +255,8 @@ class Dialog {
     } else if (request.method == SipMethod.NOTIFY) {
       // RFC6665 3.2 Replace the dialog's remote target URI if the request is accepted.
       if (request.hasHeader('contact')) {
-        eventHandlers!.on(EventStateChanged(), (EventStateChanged state) {
+        eventHandlers!.on<EventStateChanged>(EventStateChanged(),
+            (EventStateChanged state) {
           if (request.server_transaction!.state == TransactionState.COMPLETED) {
             _remote_target = request.parseHeader('contact').uri;
           }

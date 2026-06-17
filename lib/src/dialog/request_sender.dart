@@ -66,12 +66,13 @@ class DialogRequestSender {
                 TransactionState.COMPLETED ||
             request_sender.clientTransaction?.state ==
                 TransactionState.TERMINATED) {
-          eventHandlers.remove(EventStateChanged(), stateChanged);
+          eventHandlers.remove<EventStateChanged>(
+              EventStateChanged(), stateChanged);
           _dialog.uac_pending_reply = false;
         }
       };
 
-      eventHandlers.on(EventStateChanged(), stateChanged);
+      eventHandlers.on<EventStateChanged>(EventStateChanged(), stateChanged);
     }
   }
 
