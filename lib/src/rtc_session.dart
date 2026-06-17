@@ -138,6 +138,7 @@ class RTCSession extends EventManager implements Owner {
   bool _audioMuted = false;
   bool _videoMuted = false;
   bool _localHold = false;
+  bool? _pendingLocalHold;
   bool _remoteHold = false;
 
   late RFC4028Timers _sessionTimers;
@@ -1069,6 +1070,10 @@ class RTCSession extends EventManager implements Owner {
       return false;
     }
 
+    if (_pendingLocalHold != null) {
+      return false;
+    }
+
     if (_localHold == true) {
       return false;
     }
@@ -1077,17 +1082,21 @@ class RTCSession extends EventManager implements Owner {
       return false;
     }
 
-    _localHold = true;
-    _onhold(Originator.local);
+    _pendingLocalHold = true;
 
     EventManager handlers = EventManager();
 
     handlers.on(EventSucceeded(), (EventSucceeded event) {
+      _localHold = true;
+      _pendingLocalHold = null;
+      _onhold(Originator.local);
       if (done != null) {
         done(event.response);
       }
     });
     handlers.on(EventCallFailed(), (EventCallFailed event) {
+      _pendingLocalHold = null;
+      _setLocalMediaStatus();
       terminate(<String, dynamic>{
         'cause': DartSIP_C.CausesType.WEBRTC_ERROR,
         'status_code': 500,
@@ -1122,6 +1131,10 @@ class RTCSession extends EventManager implements Owner {
       return false;
     }
 
+    if (_pendingLocalHold != null) {
+      return false;
+    }
+
     if (_localHold == false) {
       return false;
     }
@@ -1130,16 +1143,20 @@ class RTCSession extends EventManager implements Owner {
       return false;
     }
 
-    _localHold = false;
-    _onunhold(Originator.local);
+    _pendingLocalHold = false;
 
     EventManager handlers = EventManager();
     handlers.on(EventSucceeded(), (EventSucceeded event) {
+      _localHold = false;
+      _pendingLocalHold = null;
+      _onunhold(Originator.local);
       if (done != null) {
         done(event.response);
       }
     });
     handlers.on(EventCallFailed(), (EventCallFailed event) {
+      _pendingLocalHold = null;
+      _setLocalMediaStatus();
       terminate(<String, dynamic>{
         'cause': DartSIP_C.CausesType.WEBRTC_ERROR,
         'status_code': 500,
@@ -1547,6 +1564,7 @@ class RTCSession extends EventManager implements Owner {
       return;
     }
     _state = RtcSessionState.terminated;
+    _pendingLocalHold = null;
     // Terminate RTC.
     if (_connection != null) {
       try {
@@ -2788,7 +2806,7 @@ class RTCSession extends EventManager implements Owner {
       sendRequest(SipMethod.ACK);
 
       // If it is a 2XX retransmission exit now.
-      if (succeeded != null) {
+      if (succeeded) {
         return;
       }
 
@@ -3063,7 +3081,7 @@ class RTCSession extends EventManager implements Owner {
       _handleSessionTimersInIncomingResponse(response);
 
       // If it is a 2XX retransmission exit now.
-      if (succeeded != null) {
+      if (succeeded) {
         return;
       }
 
@@ -3195,14 +3213,16 @@ class RTCSession extends EventManager implements Owner {
    * Correctly set the SDP direction attributes if the call is on local hold
    */
   String? _mangleOffer(String? sdpInput) {
-    if (!_localHold && !_remoteHold) {
+    final bool localHold = _pendingLocalHold ?? _localHold;
+
+    if (!localHold && !_remoteHold) {
       return sdpInput;
     }
 
     Map<String, dynamic> sdp = sdp_transform.parse(sdpInput!);
 
     // Local hold.
-    if (_localHold && !_remoteHold) {
+    if (localHold && !_remoteHold) {
       logger.d('mangleOffer() | me on hold, mangling offer');
       for (Map<String, dynamic> m in sdp['media']) {
         if (holdMediaTypes.indexOf(m['type']) == -1) {
@@ -3218,7 +3238,7 @@ class RTCSession extends EventManager implements Owner {
       }
     }
     // Local and remote hold.
-    else if (_localHold && _remoteHold) {
+    else if (localHold && _remoteHold) {
       logger.d('mangleOffer() | both on hold, mangling offer');
       for (Map<String, dynamic> m in sdp['media']) {
         if (holdMediaTypes.indexOf(m['type']) == -1) {
