@@ -16,6 +16,7 @@ import 'uri.dart';
 import 'utils.dart' as utils;
 
 const int MIN_REGISTER_EXPIRES = 10; // In seconds.
+const int REGISTER_EXPIRING_MARGIN_MS = 10000; // 10 seconds before expiry.
 
 class UnHandledResponse {
   UnHandledResponse(this.status_code, this.reason_phrase);
@@ -213,7 +214,7 @@ class Registrator {
           }
 
           // Re-Register or emit an event before the expiration interval has elapsed.
-          // For that, decrease the expires value. ie: 3 seconds.
+          // Keep a 10 second margin before the server expires the registration.
           _registrationTimer = setTimeout(() {
             clearTimeout(_registrationTimer);
             _registrationTimer = null;
@@ -224,7 +225,7 @@ class Registrator {
             } else {
               _ua.emit(EventRegistrationExpiring());
             }
-          }, (expires * 1000) - 5000);
+          }, (expires * 1000) - REGISTER_EXPIRING_MARGIN_MS);
 
           // Save gruu values.
           if (contact.hasParam('temp-gruu')) {
